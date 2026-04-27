@@ -1,0 +1,10 @@
+[package]
+name = "st"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+deno_core = "0.399.0"
+serde = { version = "1.0.228", features = ["derive"] }
+tokio = { version = "1.52.1", features = ["full"] }
+winit = "0.30.13"
