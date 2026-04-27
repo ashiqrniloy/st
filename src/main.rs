@@ -138,38 +138,39 @@ fn main() {
         elwt.set_control_flow(ControlFlow::Poll);
 
         match event {
-            Event::WindowEvent { window_id, event } if window_id ==window.id() => {
-                WindowEvent::CloseRequested => {
-                    println!("Closing st...");
-                    elwt.exit();
-                }
+            Event::WindowEvent { window_id, event } if window_id == window.id() => {
+                match event {
+                    WindowEvent::CloseRequested => {
+                        println!("Closing st...");
+                        elwt.exit();
+                    }
 
-                // catch user pressing key
-                WindowEvent::KeyboardInput { event: key_event, .. } => {
-                    if key_event.state == ElementState::Pressed {
-                        if let Key::Character(ch) = key_event.logical_key {
-                            if let Some(c) = ch.as_str().char().next() {
-                                println!("UI Thread: Caught physical key '{}', c");
-                                let _ = ui_tx.send(UiEvent::KeyPress((c)));
+                    // catch user pressing key
+                    WindowEvent::KeyboardInput { event: key_event, .. } => {
+                        if key_event.state == ElementState::Pressed {
+                            if let Key::Character(ch) = &key_event.logical_key {
+                                if let Some(c) = ch.chars().next() {
+                                    println!("UI Thread: Caught physical key '{}'", c);
+                                    let _ = ui_tx.send(UiEvent::KeyPress(c));
+                                }
                             }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
+            Event::AboutToWait => {
+                // check for pending draw commands
+                while let Ok(command) = ui_rx.try_recv() {
+                    println!("UI Thread: Received command from TS: {:?}", command);
 
-        Event::AboutToWait => {
-            // check for pending draw commands
-            while let Ok(command) = ui_rx.try_recv() {
-                println!("UI Thread: Received command from TS: {:?}", command);
-
-                // send request to GPU to be implemented
-                // for now request OS to draw
-                window.request_redraw();
+                    // send request to GPU to be implemented
+                    // for now request OS to draw
+                    window.request_redraw();
+                }
             }
+            _ => {}
         }
-        _ => {}
     }).unwrap();
 
 }
