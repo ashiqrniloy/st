@@ -4,7 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+softbuffer = "0.4"
 deno_core = "0.399.0"
+deno_error = "0.7.1"
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.52.1", features = ["full"] }
-winit = "0.30.13"
+winit = { version = "0.30.13", features = ["wayland", "x11"] }
+
+[features]
+# Pass --features force-x11 on WSL2 where WAYLAND_DISPLAY is set but
+# no real compositor exists. On native Linux, omit this flag and
+# winit will use Wayland (or X11) automatically at runtime.
+force-x11 = []
