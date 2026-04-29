@@ -178,6 +178,21 @@ Current implemented behavior has been audited, and user-tunable defaults are rep
 
 Goal: establish performance rules early so the editor does not mature around unscalable paths.
 
+Acceptance criteria:
+
+- Typing, cursor movement, selection-ready paths, undo/redo-ready paths, and scene generation remain Rust-owned and do not require JavaScript.
+- Instrumentation exposes key-to-scene latency, scene-to-client latency, IPC payload sizes, event-loop queue depth, outbound queue depth, and runtime/worker timings where applicable.
+- Server/editor state is never held across socket I/O awaits or JavaScript execution.
+- Tests or assertions guard the non-blocking dispatch and state-ownership rules that can be checked at this phase.
+
+Test plan:
+
+- Add unit tests or assertions for Rust-owned hot-path dispatch where practical.
+- Add instrumentation tests or focused assertions for latency counters, payload-size counters, queue-depth counters, and runtime/worker timing hooks.
+- Add a code-structure/regression test or review checklist item proving server/editor state is not held across socket I/O awaits or JavaScript execution.
+
+Implementation tasks:
+
 - [ ] Document in code comments that Rust owns the editor hot path.
 - [ ] Ensure ordinary typing, cursor movement, selection, undo/redo, and scene generation do not require JavaScript.
 - [ ] Ensure JavaScript registers behavior while Rust dispatches and validates commands.
@@ -191,8 +206,11 @@ Goal: establish performance rules early so the editor does not mature around uns
 - [ ] Add a rule that server/editor state is never held across socket I/O awaits.
 - [ ] Add a rule that server/editor state is never held while executing JavaScript.
 - [ ] Add a rule that extensions request typed commands/transactions instead of mutating editor state directly.
-- [ ] Add tests or assertions around non-blocking server dispatch where practical.
 - [ ] Link this phase to `performance.md` as the detailed rationale.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -203,6 +221,21 @@ The project has explicit performance guardrails and basic latency/message-size v
 ## Phase 10: Scalable Buffer Storage And Versioned Snapshots
 
 Goal: replace the early `String` buffer model before file, mode, LSP, and extension features depend on it.
+
+Acceptance criteria:
+
+- The canonical buffer representation is no longer a plain long-term `String` mutation model.
+- Insert/delete operations remain efficient and preserve correct cursor behavior.
+- Line/column, UTF-8, and UTF-16 mappings are available and tested.
+- Snapshots include buffer versions, and stale background results can be rejected.
+
+Test plan:
+
+- Add storage tests for large-buffer insert/delete operations and cursor preservation.
+- Add mapping tests for line/column, UTF-8 offsets, and UTF-16 offsets, including multi-byte text.
+- Add snapshot/version tests proving stale worker-style results can be rejected.
+
+Implementation tasks:
 
 - [ ] Evaluate `ropey`, piece-table storage, or another scalable text storage structure.
 - [ ] Choose the initial scalable buffer representation.
@@ -218,10 +251,10 @@ Goal: replace the early `String` buffer model before file, mode, LSP, and extens
 - [ ] Add cheap immutable snapshot support for background workers.
 - [ ] Include `BufferVersion` in snapshots.
 - [ ] Ensure background results can be discarded when their `BufferVersion` is stale.
-- [ ] Update editor command tests for the new storage abstraction.
-- [ ] Add tests for large-buffer insert/delete behavior.
-- [ ] Add tests for line/column and UTF-16 mapping.
-- [ ] Add tests for stale snapshot rejection.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -232,6 +265,21 @@ The editor no longer depends on a simple String as the canonical long-term buffe
 ## Phase 11: Incremental Scene And Viewport Protocol
 
 Goal: stop depending on full-buffer scene updates before large files, multiple clients, decorations, and modes make that path expensive.
+
+Acceptance criteria:
+
+- Clients report viewports and the server tracks each client's viewport independently.
+- Typing in a large buffer does not require full-buffer scene updates after initial sync/resync.
+- Cursor, selection, visible text, decoration, and diagnostic updates have incremental protocol paths.
+- Payload-size instrumentation demonstrates reduced update size for viewport-scoped edits.
+
+Test plan:
+
+- Add protocol tests for viewport reporting and independent per-client viewport state.
+- Add scene-update tests proving cursor, selection, text, decoration, and diagnostic changes can be sent incrementally.
+- Add payload-size tests or metrics assertions comparing viewport-scoped updates with full-buffer snapshots.
+
+Implementation tasks:
 
 - [ ] Define client viewport reporting from GPUI client to server.
 - [ ] Track each client's viewport independently on the server.
@@ -246,10 +294,10 @@ Goal: stop depending on full-buffer scene updates before large files, multiple c
 - [ ] Keep an initial full scene snapshot path for first render/resync.
 - [ ] Add resync handling if a client misses or rejects a patch.
 - [ ] Track IPC payload sizes before and after the protocol change.
-- [ ] Add tests for cursor-only updates.
-- [ ] Add tests for text patch updates.
-- [ ] Add tests for independent client viewport updates.
-- [ ] Add tests for full snapshot resync.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -260,6 +308,21 @@ Typing in a large buffer does not require sending the entire buffer to every cli
 ## Phase 12: Background Worker Architecture
 
 Goal: create the worker foundation needed for modes, parsing, indexing, search, LSP coordination, and autocomplete without blocking the server event loop.
+
+Acceptance criteria:
+
+- Expensive CPU and I/O work is scheduled outside the central server event loop.
+- Workers receive immutable snapshots or typed requests, never mutable editor state.
+- Worker responses include request/session/buffer/version metadata and stale results are discarded.
+- Cancellation, timeout, queue-depth, and duration behavior is observable and tested.
+
+Test plan:
+
+- Add tests that long-running CPU/I/O tasks do not block typing or central event-loop message handling.
+- Add tests that workers receive immutable snapshots or typed requests and that stale versioned responses are discarded.
+- Add tests for cancellation, timeout behavior, queue-depth metrics, and task-duration metrics.
+
+Implementation tasks:
 
 - [ ] Define a background task request/response model.
 - [ ] Define worker request IDs for correlating responses.
@@ -274,9 +337,10 @@ Goal: create the worker foundation needed for modes, parsing, indexing, search, 
 - [ ] Add cancellation support for parse/search/completion-style tasks.
 - [ ] Add timeout support for worker requests where appropriate.
 - [ ] Add metrics for worker queue depth and task duration.
-- [ ] Add tests that a long-running worker task does not block typing.
-- [ ] Add tests that stale worker results are discarded.
-- [ ] Add tests that cancelling one task does not cancel unrelated tasks.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -288,15 +352,47 @@ The server can schedule expensive work in parallel without blocking client IPC, 
 
 Goal: stop embedding JS source in Rust.
 
+Acceptance criteria:
+
+- JavaScript runtime source is loaded from disk instead of embedded Rust strings.
+- Syntax and runtime load errors are reported clearly.
+- The server remains alive and usable when JavaScript loading fails.
+
+Test plan:
+
+- Add runtime-loading tests using temporary runtime files on disk.
+- Add syntax/runtime error tests proving load failures are reported clearly.
+- Add a failure-path test proving the server remains alive after JavaScript load failure.
+
+Implementation tasks:
+
 - [ ] Create `runtime/bootstrap.js`.
 - [ ] Create `runtime/editor_api.js`.
 - [ ] Load bootstrap from disk in server runtime.
 - [ ] Report JS syntax/runtime errors clearly.
 - [ ] Keep server alive if JS fails to load.
 
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
+
 ## Phase 14: JS Commands And Keybindings
 
 Goal: make the editor programmable while keeping Rust in control of command dispatch.
+
+Acceptance criteria:
+
+- Key input is normalized into Rust-owned key chords and resolved through a Rust-owned keymap before text insertion.
+- Rust builtin commands execute without invoking Deno.
+- JS commands and keybindings can be registered with metadata and ownership tracking.
+- JS command requests are validated by Rust before mutating editor state.
+
+Test plan:
+
+- Add key normalization and keymap-resolution tests for printable, modified, and multi-key chords.
+- Add dispatch tests proving Rust builtin commands do not invoke Deno and JS commands do.
+- Add registration/ownership tests for JS commands and keybindings.
+- Add validation tests proving malformed or unauthorized JS command requests cannot mutate editor state.
 
 Design rule:
 
@@ -367,12 +463,29 @@ Implementation tasks:
 - [ ] Invoke Deno only for keybindings/commands registered by JS.
 - [ ] Allow JS command to request a typed `EditorCommand`.
 - [ ] Validate and apply requested `EditorCommand` in Rust server.
-- [ ] Add tests for keymap resolution.
-- [ ] Add tests for Rust builtin vs JS command dispatch.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 ## Phase 15: Code Review
 
 Goal: review all code written so far and align the implementation with the project's documentation, configuration, and performance principles before adding more UI and command-center complexity.
+
+Acceptance criteria:
+
+- Dead code that is not useful for planned future implementation is removed.
+- Code aligns with `documentation.md`, `config.md`, and `performance.md`.
+- Simplifications and more elegant solutions are applied where they improve the code without weakening architecture or tests.
+- All existing behavior remains covered by passing tests after cleanup.
+
+Test plan:
+
+- Add or update tests that protect behavior touched by cleanup before changing implementation.
+- Run documentation/configuration/performance conformance checks where automated checks exist; otherwise record a focused review checklist.
+- After cleanup, run the full suite to prove behavior did not regress.
+
+Implementation tasks:
 
 - [ ] Review all code written so far.
 - [ ] Remove dead code that is not useful for future implementations.
@@ -386,7 +499,9 @@ Goal: review all code written so far and align the implementation with the proje
 - [ ] Keep public/user-visible behavior documented through structured metadata.
 - [ ] Keep user-tunable behavior represented through the configuration foundation.
 - [ ] Keep Rust-owned hot paths and avoid introducing JavaScript-heavy bottlenecks.
-- [ ] Run formatting and tests after cleanup.
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -428,15 +543,51 @@ Goal: placeholder for view-documentation functionality.
 
 Goal: reload JS without recompiling Rust.
 
+Acceptance criteria:
+
+- A user-visible command can reload JS/runtime extension state without recompiling Rust.
+- Old JS-owned resources are disposed before replacement resources are registered.
+- Reload errors are reported without crashing the server or connected clients.
+- Commands/keybindings after reload match the newly loaded runtime state.
+
+Test plan:
+
+- Add reload-command tests for successful runtime reload without Rust recompilation.
+- Add resource-disposal tests proving old JS-owned commands/keybindings/resources are removed before replacement.
+- Add failure-path tests proving reload errors are reported and clients/server remain alive.
+- Add post-reload registry tests proving commands/keybindings reflect newly loaded runtime state.
+
+Implementation tasks:
+
 - [ ] Add command to reload JS runtime/extensions.
 - [ ] Dispose old JS resources.
 - [ ] Reload JS files from disk.
 - [ ] Re-register commands/keybindings.
 - [ ] Report reload errors without crashing server or clients.
 
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
+
 ## Phase 22: Extension Lifecycle
 
 Goal: prepare for real extensions.
+
+Acceptance criteria:
+
+- Extensions have explicit activation and optional deactivation lifecycle hooks.
+- Extension-owned resources are tracked and disposed on reload/unload.
+- Activation/deactivation errors are isolated and reported without corrupting server state.
+- Lifecycle behavior is documented through structured metadata where user-visible.
+
+Test plan:
+
+- Add activation/deactivation lifecycle tests for successful extensions.
+- Add resource-tracking tests proving extension-owned resources are disposed on reload/unload.
+- Add error-isolation tests for activation and deactivation failures.
+- Add documentation metadata tests for user-visible lifecycle commands/settings where applicable.
+
+Implementation tasks:
 
 - [ ] Define extension activation API.
 - [ ] Define optional deactivation API.
@@ -444,9 +595,29 @@ Goal: prepare for real extensions.
 - [ ] Dispose resources on reload/unload.
 - [ ] Isolate activation errors.
 
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
+
 ## Phase 23: File I/O
 
 Goal: edit real files.
+
+Acceptance criteria:
+
+- Files can be opened into server-owned buffers and saved through server-routed commands.
+- Buffer path and dirty state are tracked accurately.
+- Read/write errors are reported clearly without losing editor state.
+- File commands participate in the command/documentation/configuration model where user-visible.
+
+Test plan:
+
+- Add open/save command tests using temporary files.
+- Add dirty-state and buffer-path tests covering open, edit, save, and save failure paths.
+- Add read/write error tests proving errors are surfaced without losing server-owned state.
+- Add documentation/configuration metadata tests for user-visible file commands where applicable.
+
+Implementation tasks:
 
 - [ ] Add open file command.
 - [ ] Add save file command.
@@ -455,9 +626,29 @@ Goal: edit real files.
 - [ ] Handle file read/write errors.
 - [ ] Route file requests through server.
 
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
+
 ## Phase 24: Undo/Redo
 
 Goal: make editing usable.
+
+Acceptance criteria:
+
+- Edits are represented as transactions with before/after cursor state.
+- Undo and redo correctly handle insert and delete/backspace operations.
+- Undo/redo integrates with dirty-state and future transaction-based systems.
+- Tests cover transaction ordering, cursor restoration, and redo invalidation after new edits.
+
+Test plan:
+
+- Add transaction tests covering before/after cursor state and edit ordering.
+- Add undo/redo tests for insert, delete, and backspace operations.
+- Add redo invalidation tests after new edits.
+- Add dirty-state integration tests where file state exists.
+
+Implementation tasks:
 
 - [ ] Define edit transactions.
 - [ ] Add undo stack.
@@ -465,12 +656,31 @@ Goal: make editing usable.
 - [ ] Store cursor state before/after edits.
 - [ ] Implement undo insert.
 - [ ] Implement undo delete/backspace.
-- [ ] Add tests.
 
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 ## Phase 25: Text Editing Features In Depth
 
 Goal: revisit editor text behavior comprehensively after core storage, file, and undo/redo primitives are stronger.
+
+Acceptance criteria:
+
+- Selection, traversal, and editability/read-only behavior are modeled server-side.
+- Movement by character, word, line, sentence, file boundary, and page is explicit and tested.
+- Keyboard and mouse selection behavior is deterministic and command-routed where applicable.
+- Read-only state prevents mutations while still allowing navigation and selection.
+
+Test plan:
+
+- Add server-side selection model tests for character, word, line, sentence, and multi-range cases where supported.
+- Add traversal tests for file boundaries, arrow keys, Home/End, and PageUp/PageDown.
+- Add mouse selection tests or deterministic event-model tests for click/drag/double-click/triple-click behavior.
+- Add read-only/editable tests proving navigation is allowed and mutations are blocked when read-only.
+
+Implementation tasks:
 
 - [ ] Define canonical server-side selection model.
 - [ ] Define editable vs read-only editor state.
@@ -494,7 +704,10 @@ Goal: revisit editor text behavior comprehensively after core storage, file, and
 - [ ] Add Home/End and platform-specific variants.
 - [ ] Add PageUp/PageDown behavior.
 - [ ] Add mouse click, drag, double-click, and triple-click selection behavior.
-- [ ] Add tests for movement, selection expansion, and editability/read-only behavior.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -505,6 +718,20 @@ Core text traversal, selection, and editability behavior is explicit, tested, an
 ## Phase 26: Multi-Session Client Architecture
 
 Goal: support multiple independent clients on one server with separate sessions and editor state, while still allowing explicit shared-session attachment later. Implement the proper architecture directly, not a temporary shared-global-state workaround.
+
+Acceptance criteria:
+
+- Each client receives an independent session by default.
+- Clients share updates only through explicit attach semantics.
+- The central server event loop remains the only mutator of clients, sessions, buffers, and editor state.
+- Disconnecting or slowing one client does not block or corrupt unrelated clients/sessions.
+
+Test plan:
+
+- Add ID allocation and client/session/buffer association tests.
+- Add independent-session tests proving two default clients diverge.
+- Add explicit attach tests proving attached clients share updates and unattached clients do not.
+- Add disconnect/slow-client tests proving unrelated clients and sessions are unaffected.
 
 Target ownership model:
 
@@ -589,13 +816,10 @@ Implementation tasks:
 - [ ] Destroy empty scratch sessions when their last client disconnects if they are not retained.
 - [ ] Ensure closing one client removes only that `ClientId` and possibly its unretained empty session.
 - [ ] Ensure closing one client never shuts down the server.
-- [ ] Add unit tests for ID allocation and client/session association.
-- [ ] Add unit tests for independent client sessions.
-- [ ] Add unit tests for explicit shared-session attachment.
-- [ ] Add unit tests that updates are session-scoped, not global.
-- [ ] Add unit tests that a disconnected client is removed without affecting unrelated clients/sessions.
-- [ ] Add an integration/manual test recipe: open two clients, type different text, verify they diverge.
-- [ ] Add an integration/manual test recipe: explicitly attach a second client to an existing session, type once, verify both attached clients update.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -613,14 +837,45 @@ Per-client Tokio tasks perform IPC only.
 
 Goal: allow persistent background server operation.
 
+Acceptance criteria:
+
+- Foreground server mode and user-service operation are documented.
+- Socket path creation and cleanup work correctly under systemd-style runtime environments.
+- The plan clearly decides whether a daemon flag is needed or systemd is sufficient.
+
+Test plan:
+
+- Add runtime-dir/socket-path tests simulating systemd-style environment variables.
+- Add CLI/help or documentation tests for foreground server mode and user-service instructions where practical.
+- Add a validation check documenting the daemon-vs-systemd decision.
+
+Implementation tasks:
+
 - [ ] Add documented foreground server mode.
 - [ ] Add documented user service example.
 - [ ] Decide whether `st server --daemon` is needed or systemd is enough.
 - [ ] Ensure socket path and cleanup work under systemd.
 
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
+
 ## Phase 28: Adopt GPUI Component For Non-Editor UI
 
 Goal: improve application chrome and supporting UI using `gpui-component` without replacing the custom server-backed editor surface.
+
+Acceptance criteria:
+
+- `gpui-component` is used only for non-editor UI surfaces.
+- The custom server-backed editor surface remains independent of `gpui-component::InputState`.
+- Application startup initializes component support only after core rendering boundaries are stable.
+- Allowed component-backed UI surfaces are documented.
+
+Test plan:
+
+- Add boundary tests or compile-time structure checks proving editor input/state does not depend on gpui-component InputState.
+- Add startup tests or smoke tests for component initialization where practical.
+- Add documentation tests/checks for allowed gpui-component UI surfaces.
 
 Explicit boundary: `gpui-component` is not used for the editor itself. The editor remains our custom GPUI native editor view, backed by server-owned editor state.
 
@@ -645,9 +900,27 @@ Implementation tasks:
 - [ ] Keep editor buffer, cursor, selections, undo/redo, and key dispatch outside `gpui-component::InputState`.
 - [ ] Document which UI surfaces are allowed to use `gpui-component`.
 
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
+
 ## Phase 29: Extension And Agent Runtime Architecture
 
 Goal: use one JS runtime for normal editor programmability and isolated per-agent JS runtimes for long-running or blocking agent work. Implement the final runtime separation model directly so blocked agent code cannot freeze normal editor behavior.
+
+Acceptance criteria:
+
+- Normal editor extensions run in a lightweight editor runtime separate from agent runtimes.
+- Each active agent has an isolated runtime worker and cannot block normal editor commands or other agents.
+- All runtime communication uses typed request/response channels and immutable snapshots or typed requests.
+- All agent-requested mutations are validated by Rust and routed through normal transactions/commands.
+
+Test plan:
+
+- Add request/response dispatch tests for the normal editor runtime worker.
+- Add independent agent runtime tests proving blocked agents do not block editor JS or other agents.
+- Add typed snapshot/request tests proving runtimes do not receive mutable editor state.
+- Add validation tests proving invalid agent mutations are rejected and accepted edits route through normal transactions/commands.
 
 Target runtime model:
 
@@ -763,13 +1036,10 @@ Implementation tasks:
 - [ ] Add a policy hook for maximum runtime duration per agent.
 - [ ] Add a policy hook for maximum pending requests per agent.
 - [ ] Define the future migration path from per-agent runtime workers to per-agent OS processes for stronger isolation.
-- [ ] Add tests for normal editor runtime request/response dispatch.
-- [ ] Add tests for independent agent runtime request/response dispatch.
-- [ ] Add tests that a blocked agent does not block normal editor JS commands.
-- [ ] Add tests that a blocked agent does not block another agent.
-- [ ] Add tests that cancelling one agent does not cancel unrelated agents.
-- [ ] Add tests that agent-proposed invalid edits are rejected by the server.
-- [ ] Add tests that accepted agent edits produce normal transactions and scene updates.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -785,8 +1055,28 @@ All mutations still go through validated Rust server commands and normal edit tr
 
 Goal: add advanced features safely after the editor core works.
 
+Acceptance criteria:
+
+- Extension permissions gate file, network, subprocess, AI, and tool access where applicable.
+- AI/tool edits are routed through normal command/transaction paths.
+- AI edits are previewable, reversible, and permission-checked.
+- Permission and AI capabilities are discoverable through structured documentation.
+
+Test plan:
+
+- Add permission-policy tests for file, network, subprocess, AI, and tool access gates.
+- Add AI/tool edit tests proving edits route through normal command/transaction paths.
+- Add preview/reversal tests for AI edits.
+- Add documentation metadata tests proving permission and AI capabilities are discoverable.
+
+Implementation tasks:
+
 - [ ] Define permission model for extensions.
 - [ ] Gate file/network/subprocess access.
 - [ ] Add AI command/tool API.
 - [ ] Route AI edits through normal command/transaction system.
 - [ ] Make AI edits previewable/reversible.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
