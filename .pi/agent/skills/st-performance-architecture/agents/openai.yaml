@@ -1,0 +1,4 @@
+interface:
+  display_name: "st Performance Architecture"
+  short_description: "Guardrails for scalable st editor code"
+  default_prompt: "Use $st-performance-architecture to review this st editor change for long-term performance and concurrency risks."

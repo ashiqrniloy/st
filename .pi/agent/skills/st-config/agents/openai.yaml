@@ -1,0 +1,4 @@
+interface:
+  display_name: "st Config"
+  short_description: "Rules for configurable st behavior"
+  default_prompt: "Use $st-config to ensure this st editor change is configurable and not unnecessarily hard-coded."

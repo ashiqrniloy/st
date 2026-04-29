@@ -1,0 +1,4 @@
+interface:
+  display_name: "st Documentation"
+  short_description: "Self-documenting st capability rules"
+  default_prompt: "Use $st-documentation to ensure this st editor change is discoverable through the self-documenting help system."

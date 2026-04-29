@@ -42,7 +42,249 @@ Goal: avoid unwanted background daemons during early development.
 - [x] If no clients remain for N seconds/minutes, shutdown server.
 - [x] Disable idle shutdown when launched explicitly as long-running service.
 
-## Phase 4: Load JavaScript From Disk
+## Phase 4: Emacs-Like Command Structure Foundation
+
+Goal: create the command foundation now so all future user-visible behavior is added through a discoverable command system.
+
+- [ ] Define `CommandId`.
+- [ ] Define `CommandDescriptor` with structured metadata.
+- [ ] Include required command metadata: id, title, description, source, category/namespace, arguments, examples, related docs.
+- [ ] Define `CommandSource` for builtin, extension, tool, and generated commands.
+- [ ] Define `CommandHandler` for Rust builtin handlers first.
+- [ ] Add a server-owned `CommandRegistry`.
+- [ ] Register existing builtin editor commands through `CommandRegistry`.
+- [ ] Route client command requests through `CommandRegistry` instead of ad-hoc command handling where practical.
+- [ ] Keep Rust validation and editor mutation in the server.
+- [ ] Keep ordinary text input on the Rust hot path.
+- [ ] Prepare the registry shape so later JS/extension commands can register descriptors and handlers.
+- [ ] Add tests for command registration.
+- [ ] Add tests for duplicate command ID rejection.
+- [ ] Add tests for builtin command dispatch.
+- [ ] Add tests that public commands require metadata.
+- [ ] Link this phase to `documenation.md` as the detailed documentation rationale.
+
+Milestone:
+
+```text
+User-visible operations are represented as registered commands with metadata, and future features have a single command system to plug into.
+```
+
+## Phase 5: Self-Documentation And Help Query Foundation
+
+Goal: create the server-side documentation structure and command-accessible help path so available documentation can be shown inside the editor.
+
+- [ ] Define common documentation structs for summary, description, arguments, examples, related links, and source.
+- [ ] Define documentation query types.
+- [ ] Define documentation result types.
+- [ ] Add protocol messages for documentation queries and results, or a general command-based equivalent.
+- [ ] Add server handlers for listing commands.
+- [ ] Add server handlers for describing one command.
+- [ ] Add placeholder registry/query shapes for settings, keybindings, modes, extensions, tools, permissions, and API docs.
+- [ ] Add builtin help commands such as `help.commands` and `help.command`.
+- [ ] Ensure help commands themselves have command metadata.
+- [ ] Add a simple client rendering path for documentation results, even if initially text/log based.
+- [ ] Keep documentation sourced from live server registries.
+- [ ] Do not make clients scrape markdown files as the primary help source.
+- [ ] Add tests for command listing documentation.
+- [ ] Add tests for describing a command.
+- [ ] Add tests for missing documentation query errors.
+- [ ] Add tests that help commands are discoverable through the command registry.
+
+Milestone:
+
+```text
+The editor can query the server for available command documentation and show it through the command/help path.
+```
+
+## Phase 6: Document Existing Builtin Capabilities
+
+Goal: update existing implemented behavior so the project starts with documentation coverage instead of adding docs only for future features.
+
+- [ ] Add metadata for client startup/open-client behavior where user-facing.
+- [ ] Add metadata for server startup behavior where user-facing.
+- [ ] Add metadata for explicit server shutdown / `st quit`.
+- [ ] Add metadata for close-client behavior.
+- [ ] Add metadata for insert text.
+- [ ] Add metadata for backspace.
+- [ ] Add metadata for move cursor left.
+- [ ] Add metadata for move cursor right.
+- [ ] Add metadata for current scene/render update behavior where user-facing.
+- [ ] Add metadata for idle shutdown configuration.
+- [ ] Add metadata for CLI-visible commands and flags where they intersect with in-editor help.
+- [ ] Add tests that all builtin commands have required metadata.
+- [ ] Add tests that all current user-visible settings/options have required metadata once represented in registries.
+- [ ] Add tests that documentation descriptors are non-empty and have stable IDs.
+- [ ] Add a development assertion or test helper that rejects builtin public capabilities without descriptors.
+
+Milestone:
+
+```text
+Everything already built and visible to the user has initial structured documentation metadata and can be discovered through the help foundation.
+```
+
+## Phase 7: Configuration Foundation
+
+Goal: establish the TypeScript-first configuration foundation before adding more user-visible behavior, extensions, tools, modes, and settings.
+
+- [ ] Define configuration architecture in code using `config.md` as the rationale.
+- [ ] Define default config locations, including `~/.config/st/init.ts`, without making them the only supported locations.
+- [ ] Add a typed Rust-side settings/config registry shape.
+- [ ] Add setting descriptors with id, title, description, type, default, valid values/range, examples, and reload/restart behavior.
+- [ ] Ensure setting descriptors integrate with the self-documentation metadata model.
+- [ ] Add configuration source tracking, such as default, CLI, init.ts, YAML, extension, or runtime override.
+- [ ] Define precedence rules between defaults, CLI options, init.ts, YAML-loaded values, and runtime changes.
+- [ ] Add a TypeScript-facing config API shape for future `init.ts` support.
+- [ ] Add YAML loading as declarative data support, not as the primary behavior engine.
+- [ ] Add path expansion helpers for `~`, environment variables where appropriate, and relative paths.
+- [ ] Add configuration validation and clear diagnostics.
+- [ ] Add a way to report config load errors without crashing the server when possible.
+- [ ] Add extension/tool directory configuration concepts without enforcing one directory structure.
+- [ ] Add tests for setting descriptor validation.
+- [ ] Add tests for configuration precedence.
+- [ ] Add tests for invalid configuration diagnostics.
+- [ ] Link this phase to `config.md` and the `st-config` skill as detailed guidance.
+
+Milestone:
+
+```text
+The project has a documented, typed, self-documenting configuration foundation before additional behavior becomes hard-coded.
+```
+
+## Phase 8: Make Existing Behavior Configurable
+
+Goal: audit and update current behavior so existing defaults that users may reasonably want to change are represented through the configuration foundation.
+
+- [ ] Audit existing hard-coded values and defaults.
+- [ ] Make editor background color configurable.
+- [ ] Make cursor visibility/style defaults configurable where applicable.
+- [ ] Make server auto-start idle timeout configurable.
+- [ ] Make explicit foreground server idle-timeout behavior documented/configurable through CLI/config where appropriate.
+- [ ] Make socket/runtime directory behavior configurable where safe, while preserving sensible defaults.
+- [ ] Make client/server startup behavior configurable where user-facing.
+- [ ] Make key handling defaults configurable through the command/keymap foundation where appropriate.
+- [ ] Make any hard-coded UI text/style defaults configurable if user-facing.
+- [ ] Add setting descriptors and documentation for each existing configurable option.
+- [ ] Add tests that existing configurable options have defaults and docs.
+- [ ] Add tests that configured values override defaults.
+- [ ] Ensure no new user-tunable hard-coded values are introduced without descriptors.
+
+Milestone:
+
+```text
+Current implemented behavior has been audited, and user-tunable defaults are represented through documented configuration instead of scattered hard-coded constants.
+```
+
+## Phase 9: Performance Guardrails And Instrumentation
+
+Goal: establish performance rules early so the editor does not mature around unscalable paths.
+
+- [ ] Document in code comments that Rust owns the editor hot path.
+- [ ] Ensure ordinary typing, cursor movement, selection, undo/redo, and scene generation do not require JavaScript.
+- [ ] Ensure JavaScript registers behavior while Rust dispatches and validates commands.
+- [ ] Add tracing or timing hooks around key-to-scene latency.
+- [ ] Add tracing or timing hooks around scene-to-client latency.
+- [ ] Add tracing or counters for IPC message sizes.
+- [ ] Add tracing or counters for central server event-loop queue depth.
+- [ ] Add tracing or counters for per-client outbound queue depth.
+- [ ] Add timing around Deno command execution.
+- [ ] Add timing around background worker task execution once workers exist.
+- [ ] Add a rule that server/editor state is never held across socket I/O awaits.
+- [ ] Add a rule that server/editor state is never held while executing JavaScript.
+- [ ] Add a rule that extensions request typed commands/transactions instead of mutating editor state directly.
+- [ ] Add tests or assertions around non-blocking server dispatch where practical.
+- [ ] Link this phase to `performance.md` as the detailed rationale.
+
+Milestone:
+
+```text
+The project has explicit performance guardrails and basic latency/message-size visibility before extension and mode complexity grows.
+```
+
+## Phase 10: Scalable Buffer Storage And Versioned Snapshots
+
+Goal: replace the early `String` buffer model before file, mode, LSP, and extension features depend on it.
+
+- [ ] Evaluate `ropey`, piece-table storage, or another scalable text storage structure.
+- [ ] Choose the initial scalable buffer representation.
+- [ ] Introduce `BufferId` if not already available.
+- [ ] Introduce `BufferVersion`.
+- [ ] Replace direct `String` mutation in `EditorState` with the chosen text storage abstraction.
+- [ ] Preserve efficient insert/delete operations.
+- [ ] Add line/column mapping.
+- [ ] Add UTF-8 offset mapping.
+- [ ] Add UTF-16 offset mapping for future LSP support.
+- [ ] Add range APIs for reading slices of the buffer.
+- [ ] Add explicit full-buffer read APIs only where needed.
+- [ ] Add cheap immutable snapshot support for background workers.
+- [ ] Include `BufferVersion` in snapshots.
+- [ ] Ensure background results can be discarded when their `BufferVersion` is stale.
+- [ ] Update editor command tests for the new storage abstraction.
+- [ ] Add tests for large-buffer insert/delete behavior.
+- [ ] Add tests for line/column and UTF-16 mapping.
+- [ ] Add tests for stale snapshot rejection.
+
+Milestone:
+
+```text
+The editor no longer depends on a simple String as the canonical long-term buffer representation, and background work has a versioned snapshot model.
+```
+
+## Phase 11: Incremental Scene And Viewport Protocol
+
+Goal: stop depending on full-buffer scene updates before large files, multiple clients, decorations, and modes make that path expensive.
+
+- [ ] Define client viewport reporting from GPUI client to server.
+- [ ] Track each client's viewport independently on the server.
+- [ ] Split scene updates into snapshot and patch concepts.
+- [ ] Add cursor-only update messages.
+- [ ] Add selection-only update messages.
+- [ ] Add visible-line text update messages.
+- [ ] Add decoration/style-span update messages.
+- [ ] Add diagnostics update messages for future LSP support.
+- [ ] Avoid sending full buffer text after every edit.
+- [ ] Send only visible or required ranges to each client where practical.
+- [ ] Keep an initial full scene snapshot path for first render/resync.
+- [ ] Add resync handling if a client misses or rejects a patch.
+- [ ] Track IPC payload sizes before and after the protocol change.
+- [ ] Add tests for cursor-only updates.
+- [ ] Add tests for text patch updates.
+- [ ] Add tests for independent client viewport updates.
+- [ ] Add tests for full snapshot resync.
+
+Milestone:
+
+```text
+Typing in a large buffer does not require sending the entire buffer to every client on every edit.
+```
+
+## Phase 12: Background Worker Architecture
+
+Goal: create the worker foundation needed for modes, parsing, indexing, search, LSP coordination, and autocomplete without blocking the server event loop.
+
+- [ ] Define a background task request/response model.
+- [ ] Define worker request IDs for correlating responses.
+- [ ] Define cancellable task handles.
+- [ ] Add a CPU worker pool for CPU-heavy tasks.
+- [ ] Use Tokio tasks for I/O-heavy background work.
+- [ ] Use dedicated OS threads where a subsystem has ownership or thread-affinity requirements.
+- [ ] Ensure the central server event loop schedules work but does not execute expensive work inline.
+- [ ] Ensure workers receive immutable snapshots or typed requests, not mutable editor state.
+- [ ] Ensure worker responses include relevant session/buffer/version metadata.
+- [ ] Discard stale worker responses based on `BufferVersion` or request cancellation.
+- [ ] Add cancellation support for parse/search/completion-style tasks.
+- [ ] Add timeout support for worker requests where appropriate.
+- [ ] Add metrics for worker queue depth and task duration.
+- [ ] Add tests that a long-running worker task does not block typing.
+- [ ] Add tests that stale worker results are discarded.
+- [ ] Add tests that cancelling one task does not cancel unrelated tasks.
+
+Milestone:
+
+```text
+The server can schedule expensive work in parallel without blocking client IPC, typing, rendering updates, or unrelated background tasks.
+```
+
+## Phase 13: Load JavaScript From Disk
 
 Goal: stop embedding JS source in Rust.
 
@@ -52,7 +294,7 @@ Goal: stop embedding JS source in Rust.
 - [ ] Report JS syntax/runtime errors clearly.
 - [ ] Keep server alive if JS fails to load.
 
-## Phase 5: JS Commands And Keybindings
+## Phase 14: JS Commands And Keybindings
 
 Goal: make the editor programmable while keeping Rust in control of command dispatch.
 
@@ -128,7 +370,7 @@ Implementation tasks:
 - [ ] Add tests for keymap resolution.
 - [ ] Add tests for Rust builtin vs JS command dispatch.
 
-## Phase 6: Manual Hot Reload
+## Phase 15: Manual Hot Reload
 
 Goal: reload JS without recompiling Rust.
 
@@ -138,7 +380,7 @@ Goal: reload JS without recompiling Rust.
 - [ ] Re-register commands/keybindings.
 - [ ] Report reload errors without crashing server or clients.
 
-## Phase 7: Extension Lifecycle
+## Phase 16: Extension Lifecycle
 
 Goal: prepare for real extensions.
 
@@ -148,7 +390,7 @@ Goal: prepare for real extensions.
 - [ ] Dispose resources on reload/unload.
 - [ ] Isolate activation errors.
 
-## Phase 8: File I/O
+## Phase 17: File I/O
 
 Goal: edit real files.
 
@@ -159,7 +401,7 @@ Goal: edit real files.
 - [ ] Handle file read/write errors.
 - [ ] Route file requests through server.
 
-## Phase 9: Undo/Redo
+## Phase 18: Undo/Redo
 
 Goal: make editing usable.
 
@@ -171,17 +413,8 @@ Goal: make editing usable.
 - [ ] Implement undo delete/backspace.
 - [ ] Add tests.
 
-## Phase 10: Better Buffer Data Structure
 
-Goal: support larger files.
-
-- [ ] Add tests around current `String` buffer behavior.
-- [ ] Evaluate `ropey` or another text storage structure.
-- [ ] Introduce buffer IDs.
-- [ ] Support multiple buffers.
-- [ ] Add line/column mapping.
-
-## Phase 11: Text Editing Features In Depth
+## Phase 19: Text Editing Features In Depth
 
 Goal: revisit editor text behavior comprehensively after core storage, file, and undo/redo primitives are stronger.
 
@@ -215,7 +448,7 @@ Milestone:
 Core text traversal, selection, and editability behavior is explicit, tested, and server-owned.
 ```
 
-## Phase 12: Multi-Session Client Architecture
+## Phase 20: Multi-Session Client Architecture
 
 Goal: support multiple independent clients on one server with separate sessions and editor state, while still allowing explicit shared-session attachment later. Implement the proper architecture directly, not a temporary shared-global-state workaround.
 
@@ -322,7 +555,7 @@ The central server event loop remains the only owner of canonical editor state.
 Per-client Tokio tasks perform IPC only.
 ```
 
-## Phase 13: Systemd Integration
+## Phase 21: Systemd Integration
 
 Goal: allow persistent background server operation.
 
@@ -331,7 +564,7 @@ Goal: allow persistent background server operation.
 - [ ] Decide whether `st server --daemon` is needed or systemd is enough.
 - [ ] Ensure socket path and cleanup work under systemd.
 
-## Phase 14: Adopt GPUI Component For Non-Editor UI
+## Phase 22: Adopt GPUI Component For Non-Editor UI
 
 Goal: improve application chrome and supporting UI using `gpui-component` without replacing the custom server-backed editor surface.
 
@@ -358,7 +591,7 @@ Implementation tasks:
 - [ ] Keep editor buffer, cursor, selections, undo/redo, and key dispatch outside `gpui-component::InputState`.
 - [ ] Document which UI surfaces are allowed to use `gpui-component`.
 
-## Phase 15: Extension And Agent Runtime Architecture
+## Phase 23: Extension And Agent Runtime Architecture
 
 Goal: use one JS runtime for normal editor programmability and isolated per-agent JS runtimes for long-running or blocking agent work. Implement the final runtime separation model directly so blocked agent code cannot freeze normal editor behavior.
 
@@ -494,7 +727,7 @@ Blocked or slow agent code does not block editor commands, clients, or other age
 All mutations still go through validated Rust server commands and normal edit transactions.
 ```
 
-## Phase 16: Permissions And AI Layer
+## Phase 24: Permissions And AI Layer
 
 Goal: add advanced features safely after the editor core works.
 
