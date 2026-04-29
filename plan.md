@@ -170,15 +170,9 @@ Goal: ensure the extension runtime belongs to the server, not the UI client.
 - [x] Keep JS runtime alive as long as the server is alive.
 - [x] Add graceful JS runtime shutdown when server shuts down.
 
-Target flow:
-
-```text
-Client -> IPC -> Server -> JS Runtime
-```
-
 ## Phase 9: Wire Commands Into EditorState
 
-Goal: make server-owned editor state mutate through commands.
+Goal: make server-owned editor state mutate through Rust commands before refining Deno dispatch.
 
 - [ ] Convert text key input into `EditorCommand::InsertText`.
 - [ ] Convert Backspace into `EditorCommand::Backspace`.
@@ -193,11 +187,63 @@ Milestone:
 ```text
 Client window receives keys.
 Server receives keys.
-Server mutates EditorState.
+Server mutates EditorState in Rust.
 Server logs buffer and cursor.
 ```
 
-## Phase 10: Send Render Updates From Server To Client
+## Phase 10: Establish Server-First Input Dispatch Architecture
+
+Goal: refine the Phase 9 input path so ordinary typing is handled by Rust and Deno is not placed in the mandatory hot path.
+
+Target event forwarding flow already available from Phase 8:
+
+```text
+Client -> IPC -> Server -> JS Runtime
+```
+
+Important target architecture for input handling:
+
+```text
+OS/compositor -> focused UI client -> IPC -> Rust server core -> EditorState -> SceneUpdate -> client renderer
+```
+
+Deno should not be the mandatory hot path for every normal character typed. The client captures platform input because the OS delivers keyboard events to the focused window. The server should then handle ordinary editor behavior in Rust first. Deno participates when extensions, custom commands, keybindings, modes, or AI behavior need to observe or influence the event.
+
+Preferred long-term flow for ordinary typing:
+
+```text
+Client captures KeyInputEvent
+Server converts input to EditorCommand in Rust
+Server applies EditorCommand to EditorState
+Server produces SceneUpdate
+Client renders SceneUpdate
+```
+
+Preferred long-term flow for extension-customized behavior:
+
+```text
+Client captures KeyInputEvent
+Server checks Rust/editor keymap and extension registrations
+Server forwards selected events/commands to Deno when needed
+Deno requests typed EditorCommand
+Server validates and applies EditorCommand
+Server produces SceneUpdate
+Client renders SceneUpdate
+```
+
+Implementation tasks:
+
+- [x] Client captures focused-window key input.
+- [x] Client sends `KeyInputEvent` to server over IPC.
+- [x] Server receives key input before Deno.
+- [x] Server can forward selected events to Deno.
+- [ ] Stop forwarding every ordinary `KeyInputEvent` to Deno by default.
+- [ ] Handle ordinary printable text through Rust command application from Phase 9.
+- [ ] Handle built-in editing keys through Rust command application from Phase 9.
+- [ ] Add an explicit temporary policy for which events are still forwarded to Deno for logging/debugging.
+- [ ] Document that extension keybindings later register with Rust before Deno is invoked.
+
+## Phase 11: Send Render Updates From Server To Client
 
 Goal: have server state drive client rendering.
 
@@ -217,7 +263,7 @@ Server sends render update.
 Client redraws.
 ```
 
-## Phase 11: Replace Temporary RenderCommand With Scene Updates
+## Phase 12: Replace Temporary RenderCommand With Scene Updates
 
 Goal: stop treating JS/client rendering as raw drawing long-term.
 
@@ -229,7 +275,7 @@ Goal: stop treating JS/client rendering as raw drawing long-term.
 - [ ] Replace most `RenderCommand` usage with `SceneUpdate`.
 - [ ] Keep `RenderCommand` only if needed for temporary debugging.
 
-## Phase 12: Render Visible Text
+## Phase 13: Render Visible Text
 
 Goal: make the editor visibly editable.
 
@@ -251,7 +297,7 @@ Cursor moves left/right.
 Server owns state.
 ```
 
-## Phase 13: Support Multiple Clients
+## Phase 14: Support Multiple Clients
 
 Goal: prove the client/server model is real.
 
@@ -270,7 +316,7 @@ Both receive updates.
 Closing one leaves the other and server running.
 ```
 
-## Phase 14: Add Explicit Server Shutdown
+## Phase 15: Add Explicit Server Shutdown
 
 Goal: provide reliable lifecycle control.
 
@@ -282,7 +328,7 @@ Goal: provide reliable lifecycle control.
 - [ ] Server removes socket file on exit.
 - [ ] Server exits cleanly.
 
-## Phase 15: Add Optional Idle Shutdown
+## Phase 16: Add Optional Idle Shutdown
 
 Goal: avoid unwanted background daemons during early development.
 
@@ -291,7 +337,7 @@ Goal: avoid unwanted background daemons during early development.
 - [ ] If no clients remain for N seconds/minutes, shutdown server.
 - [ ] Disable idle shutdown when launched explicitly as long-running service.
 
-## Phase 16: Load JavaScript From Disk
+## Phase 17: Load JavaScript From Disk
 
 Goal: stop embedding JS source in Rust.
 
@@ -301,17 +347,82 @@ Goal: stop embedding JS source in Rust.
 - [ ] Report JS syntax/runtime errors clearly.
 - [ ] Keep server alive if JS fails to load.
 
-## Phase 17: JS Commands And Keybindings
+## Phase 18: JS Commands And Keybindings
 
-Goal: make the editor programmable.
+Goal: make the editor programmable while keeping Rust in control of command dispatch.
 
+Design rule:
+
+```text
+Deno does not receive every key by default.
+Deno registers capabilities with Rust.
+Rust stores the active command registry and keymap.
+Rust decides what each key means.
+```
+
+Target extension API shape:
+
+```js
+editor.commands.register("insert-date", () => {
+  editor.commands.execute("insert-text", new Date().toISOString());
+});
+
+editor.keymap.bind("ctrl+d", "insert-date");
+```
+
+Target registration flow:
+
+```text
+Extension activates in Deno
+Deno registers command with Rust server
+Deno registers keybinding with Rust server
+Rust stores keybinding as owned extension resource
+```
+
+Target input dispatch flow:
+
+```text
+Client sends KeyInputEvent to server
+Server normalizes it into a KeyChord
+Server checks Rust-owned keymap
+If bound to Rust builtin command: Rust handles it directly
+If bound to JS command: Rust invokes Deno command handler
+If unbound printable text: Rust applies InsertText directly
+If unhandled special key: ignore or pass to explicit listeners later
+```
+
+Suggested Rust-side structures:
+
+```rust
+pub enum CommandHandler {
+    RustBuiltin(EditorCommand),
+    JsCommand { extension_id: ExtensionId, command_id: String },
+}
+
+pub struct Keymap {
+    bindings: HashMap<KeyChord, CommandHandler>,
+}
+```
+
+Implementation tasks:
+
+- [ ] Define `KeyChord` normalized from `KeyInputEvent`.
+- [ ] Define command registry structure in Rust server.
+- [ ] Define keymap structure in Rust server.
+- [ ] Define `CommandHandler::RustBuiltin`.
+- [ ] Define `CommandHandler::JsCommand`.
 - [ ] Expose command registration API to JS.
 - [ ] Expose keybinding registration API to JS.
-- [ ] Track command ownership.
-- [ ] Allow JS command to request an `EditorCommand`.
-- [ ] Apply requested command in Rust server.
+- [ ] Track command ownership by extension/runtime.
+- [ ] Store JS-registered keybindings in Rust-owned keymap.
+- [ ] Resolve incoming key input through Rust keymap before text insertion.
+- [ ] Invoke Deno only for keybindings/commands registered by JS.
+- [ ] Allow JS command to request a typed `EditorCommand`.
+- [ ] Validate and apply requested `EditorCommand` in Rust server.
+- [ ] Add tests for keymap resolution.
+- [ ] Add tests for Rust builtin vs JS command dispatch.
 
-## Phase 18: Manual Hot Reload
+## Phase 19: Manual Hot Reload
 
 Goal: reload JS without recompiling Rust.
 
@@ -321,7 +432,7 @@ Goal: reload JS without recompiling Rust.
 - [ ] Re-register commands/keybindings.
 - [ ] Report reload errors without crashing server or clients.
 
-## Phase 19: Extension Lifecycle
+## Phase 20: Extension Lifecycle
 
 Goal: prepare for real extensions.
 
@@ -331,7 +442,7 @@ Goal: prepare for real extensions.
 - [ ] Dispose resources on reload/unload.
 - [ ] Isolate activation errors.
 
-## Phase 20: File I/O
+## Phase 21: File I/O
 
 Goal: edit real files.
 
@@ -342,7 +453,7 @@ Goal: edit real files.
 - [ ] Handle file read/write errors.
 - [ ] Route file requests through server.
 
-## Phase 21: Undo/Redo
+## Phase 22: Undo/Redo
 
 Goal: make editing usable.
 
@@ -354,7 +465,7 @@ Goal: make editing usable.
 - [ ] Implement undo delete/backspace.
 - [ ] Add tests.
 
-## Phase 22: Better Buffer Data Structure
+## Phase 23: Better Buffer Data Structure
 
 Goal: support larger files.
 
@@ -364,7 +475,7 @@ Goal: support larger files.
 - [ ] Support multiple buffers.
 - [ ] Add line/column mapping.
 
-## Phase 23: Systemd Integration
+## Phase 24: Systemd Integration
 
 Goal: allow persistent background server operation.
 
@@ -373,7 +484,7 @@ Goal: allow persistent background server operation.
 - [ ] Decide whether `st server --daemon` is needed or systemd is enough.
 - [ ] Ensure socket path and cleanup work under systemd.
 
-## Phase 24: Permissions And AI Layer
+## Phase 25: Permissions And AI Layer
 
 Goal: add advanced features safely after the editor core works.
 
