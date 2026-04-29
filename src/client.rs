@@ -8,6 +8,7 @@ use std::{
 use tokio::{io::BufReader, net::UnixStream, sync::mpsc as tokio_mpsc, time::sleep};
 
 use crate::{
+    configuration::DEFAULT_AUTO_STARTED_IDLE_TIMEOUT_SECS,
     events::{EditorEvent, SceneUpdate},
     ipc::{connect_to_server, read_json_line, socket_path, write_json_line},
     protocol::{ClientId, ClientToServer, ServerToClient},
@@ -140,6 +141,9 @@ fn spawn_ipc_thread(
                                 println!("Client: server is shutting down: {reason}");
                                 break;
                             }
+                            Ok(Some(ServerToClient::DocumentationResult(result))) => {
+                                println!("Client help: {result:?}");
+                            }
                             Ok(None) => {
                                 println!("Client: server disconnected");
                                 break;
@@ -187,15 +191,13 @@ async fn connect_or_start_server() -> Result<UnixStream, String> {
 }
 
 fn start_server_process() -> Result<(), String> {
-    const AUTO_STARTED_IDLE_TIMEOUT_SECS: &str = "300";
-
     let current_exe = std::env::current_exe()
         .map_err(|err| format!("failed to determine current executable: {err}"))?;
 
     Command::new(current_exe)
         .arg("server")
         .arg("--idle-timeout-secs")
-        .arg(AUTO_STARTED_IDLE_TIMEOUT_SECS)
+        .arg(DEFAULT_AUTO_STARTED_IDLE_TIMEOUT_SECS.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

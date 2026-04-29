@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::events::{EditorCommand, KeyInputEvent, RenderCommand, SceneUpdate};
+use crate::{
+    documentation::{DocumentationQuery, DocumentationResult},
+    events::{EditorCommand, KeyInputEvent, RenderCommand, SceneUpdate},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClientId(pub u64);
@@ -12,6 +15,7 @@ pub enum ClientToServer {
     Command(EditorCommand),
     CloseClient { client_id: ClientId },
     ShutdownServer,
+    DocumentationQuery(DocumentationQuery),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,6 +25,7 @@ pub enum ServerToClient {
     Render(RenderCommand),
     Error { message: String },
     ServerShuttingDown { reason: String },
+    DocumentationResult(DocumentationResult),
 }
 
 #[cfg(test)]
@@ -102,6 +107,16 @@ mod tests {
         let decoded: ServerToClient =
             serde_json::from_str(&json).expect("deserialize shutdown message");
 
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn documentation_query_round_trips_through_json() {
+        let message = ClientToServer::DocumentationQuery(DocumentationQuery::DescribeCommand {
+            command_id: "editor.insert_text".into(),
+        });
+        let json = serde_json::to_string(&message).expect("serialize docs query");
+        let decoded: ClientToServer = serde_json::from_str(&json).expect("deserialize docs query");
         assert_eq!(decoded, message);
     }
 }

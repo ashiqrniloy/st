@@ -9,7 +9,14 @@ use gpui::{
 };
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::events::{EditorEvent, KeyInputEvent, SceneUpdate};
+use crate::{
+    configuration::{
+        DEFAULT_CLIENT_WINDOW_HEIGHT_PX, DEFAULT_CLIENT_WINDOW_WIDTH_PX, DEFAULT_CURSOR_VISIBLE,
+        DEFAULT_EDITOR_BACKGROUND_COLOR, DEFAULT_EDITOR_TEXT_COLOR, DEFAULT_LINE_HEIGHT_PX,
+        DEFAULT_SELECTION_COLOR,
+    },
+    events::{EditorEvent, KeyInputEvent, SceneUpdate},
+};
 
 pub struct UiChannels {
     pub ui_tx: tokio_mpsc::UnboundedSender<EditorEvent>,
@@ -83,6 +90,7 @@ struct RootView {
     is_selecting: bool,
     line_height: Pixels,
     background_color: u32,
+    cursor_visible: bool,
 }
 
 impl RootView {
@@ -101,8 +109,9 @@ impl RootView {
             last_layout: Vec::new(),
             last_bounds: None,
             is_selecting: false,
-            line_height: px(22.0),
+            line_height: px(DEFAULT_LINE_HEIGHT_PX),
             background_color: scene.background_color,
+            cursor_visible: scene.cursor_visible,
         };
         let cursor = s.char_to_byte_index(scene.cursor_char_index);
         s.selected_range = cursor..cursor;
@@ -111,6 +120,7 @@ impl RootView {
 
     fn apply_scene_update(&mut self, scene: SceneUpdate, cx: &mut Context<Self>) {
         self.background_color = scene.background_color;
+        self.cursor_visible = scene.cursor_visible;
         if self.marked_range.is_none() && !self.is_selecting {
             self.content = scene.text;
             let cursor = self.char_to_byte_index(scene.cursor_char_index);
@@ -582,7 +592,7 @@ impl Element for TextSurface {
         let run = gpui::TextRun {
             len: 0,
             font: style.font(),
-            color: rgb(0xcdd6f4).into(),
+            color: rgb(DEFAULT_EDITOR_TEXT_COLOR).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -646,7 +656,7 @@ impl Element for TextSurface {
                                 bounds.top() + view.line_height * (line_idx as f32 + 1.0),
                             ),
                         ),
-                        rgb(0x3b4261),
+                        rgb(DEFAULT_SELECTION_COLOR),
                     ))
                 })
                 .collect()
@@ -689,6 +699,7 @@ impl Element for TextSurface {
         }
 
         if focus_handle.is_focused(window)
+            && self.view.read(cx).cursor_visible
             && let Some(cursor) = prepaint.cursor.take()
         {
             window.paint_quad(cursor);
@@ -781,7 +792,14 @@ impl UiRenderer for GpuiRenderer {
             })
             .detach();
 
-            let bounds = Bounds::centered(None, size(px(900.0), px(600.0)), cx);
+            let bounds = Bounds::centered(
+                None,
+                size(
+                    px(DEFAULT_CLIENT_WINDOW_WIDTH_PX as f32),
+                    px(DEFAULT_CLIENT_WINDOW_HEIGHT_PX as f32),
+                ),
+                cx,
+            );
             let mut scene_rx = channels.scene_rx;
             let ui_tx = channels.ui_tx.clone();
 
@@ -792,10 +810,10 @@ impl UiRenderer for GpuiRenderer {
                 },
                 move |window, cx| {
                     let initial = SceneUpdate {
-                        background_color: 0x1e1e2e,
+                        background_color: DEFAULT_EDITOR_BACKGROUND_COLOR,
                         text: String::new(),
                         cursor_char_index: 0,
-                        cursor_visible: true,
+                        cursor_visible: DEFAULT_CURSOR_VISIBLE,
                     };
                     let entity = cx.new(|cx| RootView::from_scene(initial, ui_tx.clone(), cx));
                     window.focus(&entity.read(cx).focus_handle(cx));

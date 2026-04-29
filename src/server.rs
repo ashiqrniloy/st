@@ -4,8 +4,11 @@ use tokio::{io::BufReader, net::UnixStream, sync::mpsc};
 
 use crate::{
     cli::ServerOptions,
+    commands::{CommandId, CommandInvocation, CommandRegistry, editor_command_to_invocation},
+    configuration::{DEFAULT_CURSOR_VISIBLE, DEFAULT_EDITOR_BACKGROUND_COLOR},
+    documentation::{DocumentationQuery, DocumentationRegistryKind, DocumentationResult},
     editor::EditorState,
-    events::{EditorCommand, EditorEvent, KeyInputEvent, RenderCommand, SceneUpdate},
+    events::{EditorEvent, KeyInputEvent, RenderCommand, SceneUpdate},
     ipc::{bind_server_socket, connect_to_server, read_json_line, socket_path, write_json_line},
     js_runtime::spawn_js_runtime,
     protocol::{ClientId, ClientToServer, ServerToClient},
@@ -23,9 +26,26 @@ struct ClientConnection {
     tx: mpsc::UnboundedSender<ServerToClient>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EditorSceneSettings {
+    background_color: u32,
+    cursor_visible: bool,
+}
+
+impl Default for EditorSceneSettings {
+    fn default() -> Self {
+        Self {
+            background_color: DEFAULT_EDITOR_BACKGROUND_COLOR,
+            cursor_visible: DEFAULT_CURSOR_VISIBLE,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct EditorServer {
     editor: EditorState,
+    scene_settings: EditorSceneSettings,
+    command_registry: CommandRegistry,
     next_client_id: u64,
     clients: HashMap<ClientId, ClientConnection>,
 }
@@ -44,8 +64,14 @@ enum ServerEvent {
 
 impl Default for EditorServer {
     fn default() -> Self {
+        crate::documentation::validate_builtin_docs()
+            .expect("builtin documentation registration should be valid");
+
         Self {
             editor: EditorState::default(),
+            scene_settings: EditorSceneSettings::default(),
+            command_registry: CommandRegistry::with_builtin_commands()
+                .expect("builtin command registration should be valid"),
             next_client_id: 1,
             clients: HashMap::new(),
         }
@@ -81,10 +107,10 @@ impl EditorServer {
 
     fn scene_update(&self) -> SceneUpdate {
         SceneUpdate {
-            background_color: 0x1e1e2e,
+            background_color: self.scene_settings.background_color,
             text: self.editor.buffer.clone(),
             cursor_char_index: self.editor.cursor,
-            cursor_visible: true,
+            cursor_visible: self.scene_settings.cursor_visible,
         }
     }
 
@@ -139,16 +165,19 @@ impl EditorServer {
             ClientToServer::KeyInput(event) => {
                 println!("Server: key input from {client_id:?}: {event:?}");
 
-                let command = key_input_to_command(&event);
-                let handled_by_rust = command.is_some();
+                let invocation = key_input_to_command_invocation(&event);
+                let handled_by_rust = invocation.is_some();
 
-                if let Some(command) = command {
-                    self.editor.apply(command);
-                    println!(
-                        "Server: editor state: buffer={:?}, cursor={}",
-                        self.editor.buffer, self.editor.cursor
-                    );
-                    self.send_scene_update();
+                if let Some(invocation) = invocation {
+                    if let Err(err) = self.command_registry.execute(invocation, &mut self.editor) {
+                        self.send_to_client(client_id, ServerToClient::Error { message: err });
+                    } else {
+                        println!(
+                            "Server: editor state: buffer={:?}, cursor={}",
+                            self.editor.buffer, self.editor.cursor
+                        );
+                        self.send_scene_update();
+                    }
                 }
 
                 if should_forward_to_js_runtime(&event, handled_by_rust) {
@@ -158,12 +187,23 @@ impl EditorServer {
             }
             ClientToServer::Command(command) => {
                 println!("Server: command from {client_id:?}: {command:?}");
-                self.editor.apply(command);
-                println!(
-                    "Server: editor state: buffer={:?}, cursor={}",
-                    self.editor.buffer, self.editor.cursor
-                );
-                self.send_scene_update();
+                let invocation = match editor_command_to_invocation(command) {
+                    Ok(invocation) => invocation,
+                    Err(err) => {
+                        self.send_to_client(client_id, ServerToClient::Error { message: err });
+                        return false;
+                    }
+                };
+
+                if let Err(err) = self.command_registry.execute(invocation, &mut self.editor) {
+                    self.send_to_client(client_id, ServerToClient::Error { message: err });
+                } else {
+                    println!(
+                        "Server: editor state: buffer={:?}, cursor={}",
+                        self.editor.buffer, self.editor.cursor
+                    );
+                    self.send_scene_update();
+                }
             }
             ClientToServer::CloseClient {
                 client_id: requested_client_id,
@@ -190,9 +230,61 @@ impl EditorServer {
                 });
                 return true;
             }
+            ClientToServer::DocumentationQuery(query) => {
+                let result = self.handle_documentation_query(query);
+                self.send_to_client(client_id, ServerToClient::DocumentationResult(result));
+            }
         }
 
         false
+    }
+
+    fn handle_documentation_query(&self, query: DocumentationQuery) -> DocumentationResult {
+        match query {
+            DocumentationQuery::ListCommands => DocumentationResult::CommandList {
+                commands: self.command_registry.list_command_summaries(),
+            },
+            DocumentationQuery::DescribeCommand { command_id } => {
+                match self.command_registry.describe_command(&command_id) {
+                    Some(command) => DocumentationResult::CommandDetails { command },
+                    None => DocumentationResult::QueryError {
+                        message: format!("unknown command id: {command_id}"),
+                    },
+                }
+            }
+            DocumentationQuery::ListSettings => DocumentationResult::SettingsList {
+                settings: crate::documentation::builtin_settings(),
+            },
+            DocumentationQuery::DescribeSetting { setting_id } => {
+                match crate::documentation::builtin_settings()
+                    .into_iter()
+                    .find(|setting| setting.id == setting_id)
+                {
+                    Some(setting) => DocumentationResult::SettingDetails { setting },
+                    None => DocumentationResult::QueryError {
+                        message: format!("unknown setting id: {setting_id}"),
+                    },
+                }
+            }
+            DocumentationQuery::ListKeybindings => DocumentationResult::EmptyPlaceholder {
+                registry: DocumentationRegistryKind::Keybindings,
+            },
+            DocumentationQuery::ListModes => DocumentationResult::EmptyPlaceholder {
+                registry: DocumentationRegistryKind::Modes,
+            },
+            DocumentationQuery::ListExtensions => DocumentationResult::EmptyPlaceholder {
+                registry: DocumentationRegistryKind::Extensions,
+            },
+            DocumentationQuery::ListTools => DocumentationResult::EmptyPlaceholder {
+                registry: DocumentationRegistryKind::Tools,
+            },
+            DocumentationQuery::ListPermissions => DocumentationResult::EmptyPlaceholder {
+                registry: DocumentationRegistryKind::Permissions,
+            },
+            DocumentationQuery::ListApis => DocumentationResult::EmptyPlaceholder {
+                registry: DocumentationRegistryKind::Apis,
+            },
+        }
     }
 }
 
@@ -316,25 +408,31 @@ async fn run_server(options: ServerOptions) -> io::Result<()> {
     result
 }
 
-fn key_input_to_command(event: &KeyInputEvent) -> Option<EditorCommand> {
+fn key_input_to_command_invocation(event: &KeyInputEvent) -> Option<CommandInvocation> {
     if event.ctrl || event.alt || event.meta {
         return None;
     }
 
     if event.logical_key.eq_ignore_ascii_case("backspace") {
-        return Some(EditorCommand::Backspace);
+        return Some(CommandInvocation::new(
+            CommandId::new("editor.backspace").ok()?,
+        ));
     }
 
     if event.logical_key.eq_ignore_ascii_case("arrowleft")
         || event.logical_key.eq_ignore_ascii_case("left")
     {
-        return Some(EditorCommand::MoveCursorLeft);
+        return Some(CommandInvocation::new(
+            CommandId::new("editor.move_cursor_left").ok()?,
+        ));
     }
 
     if event.logical_key.eq_ignore_ascii_case("arrowright")
         || event.logical_key.eq_ignore_ascii_case("right")
     {
-        return Some(EditorCommand::MoveCursorRight);
+        return Some(CommandInvocation::new(
+            CommandId::new("editor.move_cursor_right").ok()?,
+        ));
     }
 
     let text = event.text.as_deref()?;
@@ -342,7 +440,10 @@ fn key_input_to_command(event: &KeyInputEvent) -> Option<EditorCommand> {
         return None;
     }
 
-    Some(EditorCommand::InsertText { text: text.into() })
+    Some(CommandInvocation::with_text(
+        CommandId::new("editor.insert_text").ok()?,
+        text,
+    ))
 }
 
 fn should_forward_to_js_runtime(event: &KeyInputEvent, handled_by_rust: bool) -> bool {
@@ -419,6 +520,7 @@ async fn handle_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{documentation::DocumentationQuery, events::EditorCommand};
 
     fn key_event(logical_key: &str, text: Option<&str>) -> KeyInputEvent {
         KeyInputEvent {
@@ -437,24 +539,33 @@ mod tests {
     fn translates_text_input_to_insert_text_command() {
         let event = key_event("a", Some("a"));
         assert_eq!(
-            key_input_to_command(&event),
-            Some(EditorCommand::InsertText { text: "a".into() })
+            key_input_to_command_invocation(&event),
+            Some(CommandInvocation::with_text(
+                CommandId::new("editor.insert_text").expect("id"),
+                "a"
+            ))
         );
     }
 
     #[test]
     fn translates_backspace_and_arrows() {
         assert_eq!(
-            key_input_to_command(&key_event("Backspace", None)),
-            Some(EditorCommand::Backspace)
+            key_input_to_command_invocation(&key_event("Backspace", None)),
+            Some(CommandInvocation::new(
+                CommandId::new("editor.backspace").expect("id")
+            ))
         );
         assert_eq!(
-            key_input_to_command(&key_event("ArrowLeft", None)),
-            Some(EditorCommand::MoveCursorLeft)
+            key_input_to_command_invocation(&key_event("ArrowLeft", None)),
+            Some(CommandInvocation::new(
+                CommandId::new("editor.move_cursor_left").expect("id")
+            ))
         );
         assert_eq!(
-            key_input_to_command(&key_event("ArrowRight", None)),
-            Some(EditorCommand::MoveCursorRight)
+            key_input_to_command_invocation(&key_event("ArrowRight", None)),
+            Some(CommandInvocation::new(
+                CommandId::new("editor.move_cursor_right").expect("id")
+            ))
         );
     }
 
@@ -462,7 +573,7 @@ mod tests {
     fn ignores_modified_keys_for_now() {
         let mut event = key_event("a", Some("a"));
         event.ctrl = true;
-        assert_eq!(key_input_to_command(&event), None);
+        assert_eq!(key_input_to_command_invocation(&event), None);
     }
 
     #[test]
@@ -559,5 +670,114 @@ mod tests {
 
         let special = key_event("Escape", None);
         assert!(should_forward_to_js_runtime(&special, false));
+    }
+
+    #[test]
+    fn documentation_query_lists_commands() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(!server.handle_message(
+            client_id,
+            ClientToServer::DocumentationQuery(DocumentationQuery::ListCommands),
+            &js_tx,
+        ));
+
+        let ServerToClient::DocumentationResult(DocumentationResult::CommandList { commands }) =
+            client_rx.try_recv().expect("docs result")
+        else {
+            panic!("expected command list");
+        };
+
+        assert!(commands.iter().any(|c| c.id == "editor.insert_text"));
+    }
+
+    #[test]
+    fn documentation_query_describes_command() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(!server.handle_message(
+            client_id,
+            ClientToServer::DocumentationQuery(DocumentationQuery::DescribeCommand {
+                command_id: "editor.insert_text".into(),
+            }),
+            &js_tx,
+        ));
+
+        let ServerToClient::DocumentationResult(DocumentationResult::CommandDetails { command }) =
+            client_rx.try_recv().expect("docs result")
+        else {
+            panic!("expected command details");
+        };
+
+        assert_eq!(command.id, "editor.insert_text");
+    }
+
+    #[test]
+    fn documentation_query_returns_error_for_unknown_command() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(!server.handle_message(
+            client_id,
+            ClientToServer::DocumentationQuery(DocumentationQuery::DescribeCommand {
+                command_id: "missing.command".into(),
+            }),
+            &js_tx,
+        ));
+
+        let ServerToClient::DocumentationResult(DocumentationResult::QueryError { message }) =
+            client_rx.try_recv().expect("docs result")
+        else {
+            panic!("expected query error");
+        };
+
+        assert!(message.contains("unknown command id"));
+    }
+
+    #[test]
+    fn documentation_query_lists_builtin_settings() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(!server.handle_message(
+            client_id,
+            ClientToServer::DocumentationQuery(DocumentationQuery::ListSettings),
+            &js_tx,
+        ));
+
+        let ServerToClient::DocumentationResult(DocumentationResult::SettingsList { settings }) =
+            client_rx.try_recv().expect("docs result")
+        else {
+            panic!("expected settings list");
+        };
+
+        assert!(settings.iter().any(|s| s.id == "server.idle_timeout_secs"));
+    }
+
+    #[test]
+    fn scene_update_uses_configurable_scene_settings() {
+        let mut server = EditorServer::default();
+        server.scene_settings = EditorSceneSettings {
+            background_color: 0x112233,
+            cursor_visible: false,
+        };
+
+        let scene = server.scene_update();
+        assert_eq!(scene.background_color, 0x112233);
+        assert!(!scene.cursor_visible);
     }
 }

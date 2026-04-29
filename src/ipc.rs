@@ -13,10 +13,14 @@ const APP_RUNTIME_DIR: &str = "st";
 const SOCKET_FILE_NAME: &str = "st.sock";
 
 pub fn runtime_dir() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
+    env::var_os(crate::configuration::RUNTIME_DIR_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| env::temp_dir())
-        .join(APP_RUNTIME_DIR)
+        .unwrap_or_else(|| {
+            env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(env::temp_dir)
+                .join(APP_RUNTIME_DIR)
+        })
 }
 
 pub fn socket_path() -> PathBuf {

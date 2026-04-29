@@ -46,22 +46,22 @@ Goal: avoid unwanted background daemons during early development.
 
 Goal: create the command foundation now so all future user-visible behavior is added through a discoverable command system.
 
-- [ ] Define `CommandId`.
-- [ ] Define `CommandDescriptor` with structured metadata.
-- [ ] Include required command metadata: id, title, description, source, category/namespace, arguments, examples, related docs.
-- [ ] Define `CommandSource` for builtin, extension, tool, and generated commands.
-- [ ] Define `CommandHandler` for Rust builtin handlers first.
-- [ ] Add a server-owned `CommandRegistry`.
-- [ ] Register existing builtin editor commands through `CommandRegistry`.
-- [ ] Route client command requests through `CommandRegistry` instead of ad-hoc command handling where practical.
-- [ ] Keep Rust validation and editor mutation in the server.
-- [ ] Keep ordinary text input on the Rust hot path.
-- [ ] Prepare the registry shape so later JS/extension commands can register descriptors and handlers.
-- [ ] Add tests for command registration.
-- [ ] Add tests for duplicate command ID rejection.
-- [ ] Add tests for builtin command dispatch.
-- [ ] Add tests that public commands require metadata.
-- [ ] Link this phase to `documenation.md` as the detailed documentation rationale.
+- [x] Define `CommandId`.
+- [x] Define `CommandDescriptor` with structured metadata.
+- [x] Include required command metadata: id, title, description, source, category/namespace, arguments, examples, related docs.
+- [x] Define `CommandSource` for builtin, extension, tool, and generated commands.
+- [x] Define `CommandHandler` for Rust builtin handlers first.
+- [x] Add a server-owned `CommandRegistry`.
+- [x] Register existing builtin editor commands through `CommandRegistry`.
+- [x] Route client command requests through `CommandRegistry` instead of ad-hoc command handling where practical.
+- [x] Keep Rust validation and editor mutation in the server.
+- [x] Keep ordinary text input on the Rust hot path.
+- [x] Prepare the registry shape so later JS/extension commands can register descriptors and handlers.
+- [x] Add tests for command registration.
+- [x] Add tests for duplicate command ID rejection.
+- [x] Add tests for builtin command dispatch.
+- [x] Add tests that public commands require metadata.
+- [x] Link this phase to `documenation.md` as the detailed documentation rationale.
 
 Milestone:
 
@@ -73,22 +73,22 @@ User-visible operations are represented as registered commands with metadata, an
 
 Goal: create the server-side documentation structure and command-accessible help path so available documentation can be shown inside the editor.
 
-- [ ] Define common documentation structs for summary, description, arguments, examples, related links, and source.
-- [ ] Define documentation query types.
-- [ ] Define documentation result types.
-- [ ] Add protocol messages for documentation queries and results, or a general command-based equivalent.
-- [ ] Add server handlers for listing commands.
-- [ ] Add server handlers for describing one command.
-- [ ] Add placeholder registry/query shapes for settings, keybindings, modes, extensions, tools, permissions, and API docs.
-- [ ] Add builtin help commands such as `help.commands` and `help.command`.
-- [ ] Ensure help commands themselves have command metadata.
-- [ ] Add a simple client rendering path for documentation results, even if initially text/log based.
-- [ ] Keep documentation sourced from live server registries.
-- [ ] Do not make clients scrape markdown files as the primary help source.
-- [ ] Add tests for command listing documentation.
-- [ ] Add tests for describing a command.
-- [ ] Add tests for missing documentation query errors.
-- [ ] Add tests that help commands are discoverable through the command registry.
+- [x] Define common documentation structs for summary, description, arguments, examples, related links, and source.
+- [x] Define documentation query types.
+- [x] Define documentation result types.
+- [x] Add protocol messages for documentation queries and results, or a general command-based equivalent.
+- [x] Add server handlers for listing commands.
+- [x] Add server handlers for describing one command.
+- [x] Add placeholder registry/query shapes for settings, keybindings, modes, extensions, tools, permissions, and API docs.
+- [x] Add builtin help commands such as `help.commands` and `help.command`.
+- [x] Ensure help commands themselves have command metadata.
+- [x] Add a simple client rendering path for documentation results, even if initially text/log based.
+- [x] Keep documentation sourced from live server registries.
+- [x] Do not make clients scrape markdown files as the primary help source.
+- [x] Add tests for command listing documentation.
+- [x] Add tests for describing a command.
+- [x] Add tests for missing documentation query errors.
+- [x] Add tests that help commands are discoverable through the command registry.
 
 Milestone:
 
@@ -100,21 +100,21 @@ The editor can query the server for available command documentation and show it 
 
 Goal: update existing implemented behavior so the project starts with documentation coverage instead of adding docs only for future features.
 
-- [ ] Add metadata for client startup/open-client behavior where user-facing.
-- [ ] Add metadata for server startup behavior where user-facing.
-- [ ] Add metadata for explicit server shutdown / `st quit`.
-- [ ] Add metadata for close-client behavior.
-- [ ] Add metadata for insert text.
-- [ ] Add metadata for backspace.
-- [ ] Add metadata for move cursor left.
-- [ ] Add metadata for move cursor right.
-- [ ] Add metadata for current scene/render update behavior where user-facing.
-- [ ] Add metadata for idle shutdown configuration.
-- [ ] Add metadata for CLI-visible commands and flags where they intersect with in-editor help.
-- [ ] Add tests that all builtin commands have required metadata.
-- [ ] Add tests that all current user-visible settings/options have required metadata once represented in registries.
-- [ ] Add tests that documentation descriptors are non-empty and have stable IDs.
-- [ ] Add a development assertion or test helper that rejects builtin public capabilities without descriptors.
+- [x] Add metadata for client startup/open-client behavior where user-facing.
+- [x] Add metadata for server startup behavior where user-facing.
+- [x] Add metadata for explicit server shutdown / `st quit`.
+- [x] Add metadata for close-client behavior.
+- [x] Add metadata for insert text.
+- [x] Add metadata for backspace.
+- [x] Add metadata for move cursor left.
+- [x] Add metadata for move cursor right.
+- [x] Add metadata for current scene/render update behavior where user-facing.
+- [x] Add metadata for idle shutdown configuration.
+- [x] Add metadata for CLI-visible commands and flags where they intersect with in-editor help.
+- [x] Add tests that all builtin commands have required metadata.
+- [x] Add tests that all current user-visible settings/options have required metadata once represented in registries.
+- [x] Add tests that documentation descriptors are non-empty and have stable IDs.
+- [x] Add a development assertion or test helper that rejects builtin public capabilities without descriptors.
 
 Milestone:
 
@@ -126,23 +126,23 @@ Everything already built and visible to the user has initial structured document
 
 Goal: establish the TypeScript-first configuration foundation before adding more user-visible behavior, extensions, tools, modes, and settings.
 
-- [ ] Define configuration architecture in code using `config.md` as the rationale.
-- [ ] Define default config locations, including `~/.config/st/init.ts`, without making them the only supported locations.
-- [ ] Add a typed Rust-side settings/config registry shape.
-- [ ] Add setting descriptors with id, title, description, type, default, valid values/range, examples, and reload/restart behavior.
-- [ ] Ensure setting descriptors integrate with the self-documentation metadata model.
-- [ ] Add configuration source tracking, such as default, CLI, init.ts, YAML, extension, or runtime override.
-- [ ] Define precedence rules between defaults, CLI options, init.ts, YAML-loaded values, and runtime changes.
-- [ ] Add a TypeScript-facing config API shape for future `init.ts` support.
-- [ ] Add YAML loading as declarative data support, not as the primary behavior engine.
-- [ ] Add path expansion helpers for `~`, environment variables where appropriate, and relative paths.
-- [ ] Add configuration validation and clear diagnostics.
-- [ ] Add a way to report config load errors without crashing the server when possible.
-- [ ] Add extension/tool directory configuration concepts without enforcing one directory structure.
-- [ ] Add tests for setting descriptor validation.
-- [ ] Add tests for configuration precedence.
-- [ ] Add tests for invalid configuration diagnostics.
-- [ ] Link this phase to `config.md` and the `st-config` skill as detailed guidance.
+- [x] Define configuration architecture in code using `config.md` as the rationale.
+- [x] Define default config locations, including `~/.config/st/init.ts`, without making them the only supported locations.
+- [x] Add a typed Rust-side settings/config registry shape.
+- [x] Add setting descriptors with id, title, description, type, default, valid values/range, examples, and reload/restart behavior.
+- [x] Ensure setting descriptors integrate with the self-documentation metadata model.
+- [x] Add configuration source tracking, such as default, CLI, init.ts, YAML, extension, or runtime override.
+- [x] Define precedence rules between defaults, CLI options, init.ts, YAML-loaded values, and runtime changes.
+- [x] Add a TypeScript-facing config API shape for future `init.ts` support.
+- [x] Add YAML loading as declarative data support, not as the primary behavior engine.
+- [x] Add path expansion helpers for `~`, environment variables where appropriate, and relative paths.
+- [x] Add configuration validation and clear diagnostics.
+- [x] Add a way to report config load errors without crashing the server when possible.
+- [x] Add extension/tool directory configuration concepts without enforcing one directory structure.
+- [x] Add tests for setting descriptor validation.
+- [x] Add tests for configuration precedence.
+- [x] Add tests for invalid configuration diagnostics.
+- [x] Link this phase to `config.md` and the `st-config` skill as detailed guidance.
 
 Milestone:
 
@@ -154,19 +154,19 @@ The project has a documented, typed, self-documenting configuration foundation b
 
 Goal: audit and update current behavior so existing defaults that users may reasonably want to change are represented through the configuration foundation.
 
-- [ ] Audit existing hard-coded values and defaults.
-- [ ] Make editor background color configurable.
-- [ ] Make cursor visibility/style defaults configurable where applicable.
-- [ ] Make server auto-start idle timeout configurable.
-- [ ] Make explicit foreground server idle-timeout behavior documented/configurable through CLI/config where appropriate.
-- [ ] Make socket/runtime directory behavior configurable where safe, while preserving sensible defaults.
-- [ ] Make client/server startup behavior configurable where user-facing.
-- [ ] Make key handling defaults configurable through the command/keymap foundation where appropriate.
-- [ ] Make any hard-coded UI text/style defaults configurable if user-facing.
-- [ ] Add setting descriptors and documentation for each existing configurable option.
-- [ ] Add tests that existing configurable options have defaults and docs.
-- [ ] Add tests that configured values override defaults.
-- [ ] Ensure no new user-tunable hard-coded values are introduced without descriptors.
+- [x] Audit existing hard-coded values and defaults.
+- [x] Make editor background color configurable.
+- [x] Make cursor visibility/style defaults configurable where applicable.
+- [x] Make server auto-start idle timeout configurable.
+- [x] Make explicit foreground server idle-timeout behavior documented/configurable through CLI/config where appropriate.
+- [x] Make socket/runtime directory behavior configurable where safe, while preserving sensible defaults.
+- [x] Make client/server startup behavior configurable where user-facing.
+- [x] Make key handling defaults configurable through the command/keymap foundation where appropriate.
+- [x] Make any hard-coded UI text/style defaults configurable if user-facing.
+- [x] Add setting descriptors and documentation for each existing configurable option.
+- [x] Add tests that existing configurable options have defaults and docs.
+- [x] Add tests that configured values override defaults.
+- [x] Ensure no new user-tunable hard-coded values are introduced without descriptors.
 
 Milestone:
 
@@ -370,7 +370,61 @@ Implementation tasks:
 - [ ] Add tests for keymap resolution.
 - [ ] Add tests for Rust builtin vs JS command dispatch.
 
-## Phase 15: Manual Hot Reload
+## Phase 15: Code Review
+
+Goal: review all code written so far and align the implementation with the project's documentation, configuration, and performance principles before adding more UI and command-center complexity.
+
+- [ ] Review all code written so far.
+- [ ] Remove dead code that is not useful for future implementations.
+- [ ] Review `documentation.md`, `config.md`, and `performance.md`.
+- [ ] Fix any code deviation from `documentation.md`.
+- [ ] Fix any code deviation from `config.md`.
+- [ ] Fix any code deviation from `performance.md`.
+- [ ] Simplify implementations wherever possible without compromising architecture, correctness, documentation, configurability, or performance.
+- [ ] Review the implementation for more elegant solutions.
+- [ ] Implement more elegant solutions where they are clearly better and do not compromise project constraints.
+- [ ] Keep public/user-visible behavior documented through structured metadata.
+- [ ] Keep user-tunable behavior represented through the configuration foundation.
+- [ ] Keep Rust-owned hot paths and avoid introducing JavaScript-heavy bottlenecks.
+- [ ] Run formatting and tests after cleanup.
+
+Milestone:
+
+```text
+The codebase is cleaner, simpler, aligned with documentation/configuration/performance guidance, and ready for the next UI and command phases.
+```
+
+## Phase 16: UI Design Split Window
+
+Goal: placeholder for split-window UI design, including horizontal and vertical split logic.
+
+- [ ] Placeholder: details to be added later.
+
+## Phase 17: UI Design Command Center
+
+Goal: placeholder for command center UI design. 
+
+- [ ] Introduce GPUI-components for overlays
+
+## Phase 18: Fuzzy Search Implementation
+
+Goal: placeholder for fuzzy search implementation.
+
+- [ ] Placeholder: details to be added later.
+
+## Phase 19: Execute Command Function
+
+Goal: placeholder for execute-command functionality.
+
+- [ ] Placeholder: details to be added later.
+
+## Phase 20: View Documentation Function
+
+Goal: placeholder for view-documentation functionality.
+
+- [ ] Placeholder: details to be added later.
+
+## Phase 21: Manual Hot Reload
 
 Goal: reload JS without recompiling Rust.
 
@@ -380,7 +434,7 @@ Goal: reload JS without recompiling Rust.
 - [ ] Re-register commands/keybindings.
 - [ ] Report reload errors without crashing server or clients.
 
-## Phase 16: Extension Lifecycle
+## Phase 22: Extension Lifecycle
 
 Goal: prepare for real extensions.
 
@@ -390,7 +444,7 @@ Goal: prepare for real extensions.
 - [ ] Dispose resources on reload/unload.
 - [ ] Isolate activation errors.
 
-## Phase 17: File I/O
+## Phase 23: File I/O
 
 Goal: edit real files.
 
@@ -401,7 +455,7 @@ Goal: edit real files.
 - [ ] Handle file read/write errors.
 - [ ] Route file requests through server.
 
-## Phase 18: Undo/Redo
+## Phase 24: Undo/Redo
 
 Goal: make editing usable.
 
@@ -414,7 +468,7 @@ Goal: make editing usable.
 - [ ] Add tests.
 
 
-## Phase 19: Text Editing Features In Depth
+## Phase 25: Text Editing Features In Depth
 
 Goal: revisit editor text behavior comprehensively after core storage, file, and undo/redo primitives are stronger.
 
@@ -448,7 +502,7 @@ Milestone:
 Core text traversal, selection, and editability behavior is explicit, tested, and server-owned.
 ```
 
-## Phase 20: Multi-Session Client Architecture
+## Phase 26: Multi-Session Client Architecture
 
 Goal: support multiple independent clients on one server with separate sessions and editor state, while still allowing explicit shared-session attachment later. Implement the proper architecture directly, not a temporary shared-global-state workaround.
 
@@ -555,7 +609,7 @@ The central server event loop remains the only owner of canonical editor state.
 Per-client Tokio tasks perform IPC only.
 ```
 
-## Phase 21: Systemd Integration
+## Phase 27: Systemd Integration
 
 Goal: allow persistent background server operation.
 
@@ -564,7 +618,7 @@ Goal: allow persistent background server operation.
 - [ ] Decide whether `st server --daemon` is needed or systemd is enough.
 - [ ] Ensure socket path and cleanup work under systemd.
 
-## Phase 22: Adopt GPUI Component For Non-Editor UI
+## Phase 28: Adopt GPUI Component For Non-Editor UI
 
 Goal: improve application chrome and supporting UI using `gpui-component` without replacing the custom server-backed editor surface.
 
@@ -591,7 +645,7 @@ Implementation tasks:
 - [ ] Keep editor buffer, cursor, selections, undo/redo, and key dispatch outside `gpui-component::InputState`.
 - [ ] Document which UI surfaces are allowed to use `gpui-component`.
 
-## Phase 23: Extension And Agent Runtime Architecture
+## Phase 29: Extension And Agent Runtime Architecture
 
 Goal: use one JS runtime for normal editor programmability and isolated per-agent JS runtimes for long-running or blocking agent work. Implement the final runtime separation model directly so blocked agent code cannot freeze normal editor behavior.
 
@@ -727,7 +781,7 @@ Blocked or slow agent code does not block editor commands, clients, or other age
 All mutations still go through validated Rust server commands and normal edit transactions.
 ```
 
-## Phase 24: Permissions And AI Layer
+## Phase 30: Permissions And AI Layer
 
 Goal: add advanced features safely after the editor core works.
 

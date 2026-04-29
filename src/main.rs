@@ -1,5 +1,8 @@
 mod cli;
 mod client;
+mod commands;
+mod configuration;
+mod documentation;
 mod editor;
 mod events;
 mod ipc;
