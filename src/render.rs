@@ -30,10 +30,15 @@ actions!(
     st_editor,
     [
         Backspace,
+        Enter,
         Left,
         Right,
+        Up,
+        Down,
         SelectLeft,
         SelectRight,
+        SelectUp,
+        SelectDown,
         SelectAll,
         Copy,
         Cut
@@ -259,6 +264,16 @@ impl RootView {
         self.byte_from_line_col(line_idx, col)
     }
 
+    fn vertical_target_offset(&self, line_delta: isize) -> usize {
+        let (line, col) = self.line_and_col_for_byte(self.cursor_offset());
+        let target_line = (line as isize + line_delta).max(0) as usize;
+        self.byte_from_line_col(target_line, col)
+    }
+
+    fn insert_newline(&mut self, _: &Enter, _: &mut Window, _cx: &mut Context<Self>) {
+        self.send_key("Enter", Some("\n".into()), false);
+    }
+
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
@@ -277,6 +292,14 @@ impl RootView {
         self.send_key("ArrowRight", None, false);
     }
 
+    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.vertical_target_offset(-1), cx);
+    }
+
+    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.vertical_target_offset(1), cx);
+    }
+
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.previous_boundary(self.cursor_offset()), cx);
         self.send_key("ArrowLeft", None, true);
@@ -285,6 +308,14 @@ impl RootView {
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.next_boundary(self.cursor_offset()), cx);
         self.send_key("ArrowRight", None, true);
+    }
+
+    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.vertical_target_offset(-1), cx);
+    }
+
+    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.vertical_target_offset(1), cx);
     }
 
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
@@ -492,7 +523,7 @@ struct TextSurface {
 struct PrepaintState {
     lines: Vec<ShapedLine>,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    selections: Vec<PaintQuad>,
 }
 
 impl IntoElement for TextSurface {
@@ -585,37 +616,46 @@ impl Element for TextSurface {
             gpui::blue(),
         ));
 
-        let selection = if selected_range.is_empty() {
-            None
+        let selections = if selected_range.is_empty() {
+            Vec::new()
         } else {
             let (start_line, start_col) = view.line_and_col_for_byte(selected_range.start);
             let (end_line, end_col) = view.line_and_col_for_byte(selected_range.end);
-            if start_line == end_line {
-                let line = shaped_lines.get(start_line);
-                line.map(|line| {
-                    fill(
+            (start_line..=end_line)
+                .filter_map(|line_idx| {
+                    let line = shaped_lines.get(line_idx)?;
+                    let line_text = lines_text.get(line_idx)?;
+                    let start_x = if line_idx == start_line {
+                        line.x_for_index(start_col)
+                    } else {
+                        px(0.0)
+                    };
+                    let end_x = if line_idx == end_line {
+                        line.x_for_index(end_col)
+                    } else {
+                        line.x_for_index(line_text.len())
+                    };
+                    Some(fill(
                         Bounds::from_corners(
                             point(
-                                bounds.left() + line.x_for_index(start_col),
-                                bounds.top() + view.line_height * start_line as f32,
+                                bounds.left() + start_x,
+                                bounds.top() + view.line_height * line_idx as f32,
                             ),
                             point(
-                                bounds.left() + line.x_for_index(end_col),
-                                bounds.top() + view.line_height * (start_line as f32 + 1.0),
+                                bounds.left() + end_x,
+                                bounds.top() + view.line_height * (line_idx as f32 + 1.0),
                             ),
                         ),
                         rgb(0x3b4261),
-                    )
+                    ))
                 })
-            } else {
-                None
-            }
+                .collect()
         };
 
         PrepaintState {
             lines: shaped_lines,
             cursor: cursor_quad,
-            selection,
+            selections,
         }
     }
 
@@ -636,7 +676,7 @@ impl Element for TextSurface {
             cx,
         );
 
-        if let Some(selection) = prepaint.selection.take() {
+        for selection in prepaint.selections.drain(..) {
             window.paint_quad(selection);
         }
 
@@ -676,10 +716,15 @@ impl Render for RootView {
             .track_focus(&self.focus_handle(cx))
             .key_context("StEditor")
             .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::insert_newline))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
@@ -713,10 +758,15 @@ impl UiRenderer for GpuiRenderer {
         Application::new().run(move |cx: &mut App| {
             cx.bind_keys([
                 KeyBinding::new("backspace", Backspace, Some("StEditor")),
+                KeyBinding::new("enter", Enter, Some("StEditor")),
                 KeyBinding::new("left", Left, Some("StEditor")),
                 KeyBinding::new("right", Right, Some("StEditor")),
+                KeyBinding::new("up", Up, Some("StEditor")),
+                KeyBinding::new("down", Down, Some("StEditor")),
                 KeyBinding::new("shift-left", SelectLeft, Some("StEditor")),
                 KeyBinding::new("shift-right", SelectRight, Some("StEditor")),
+                KeyBinding::new("shift-up", SelectUp, Some("StEditor")),
+                KeyBinding::new("shift-down", SelectDown, Some("StEditor")),
                 KeyBinding::new("cmd-a", SelectAll, Some("StEditor")),
                 KeyBinding::new("cmd-c", Copy, Some("StEditor")),
                 KeyBinding::new("cmd-x", Cut, Some("StEditor")),

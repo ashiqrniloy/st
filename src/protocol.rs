@@ -20,6 +20,7 @@ pub enum ServerToClient {
     Scene(SceneUpdate),
     Render(RenderCommand),
     Error { message: String },
+    ServerShuttingDown { reason: String },
 }
 
 #[cfg(test)]
@@ -88,6 +89,18 @@ mod tests {
         let json = serde_json::to_string(&message).expect("serialize scene message");
         let decoded: ServerToClient =
             serde_json::from_str(&json).expect("deserialize scene message");
+
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn shutdown_message_round_trips_through_json() {
+        let message = ServerToClient::ServerShuttingDown {
+            reason: "server shutdown requested".into(),
+        };
+        let json = serde_json::to_string(&message).expect("serialize shutdown message");
+        let decoded: ServerToClient =
+            serde_json::from_str(&json).expect("deserialize shutdown message");
 
         assert_eq!(decoded, message);
     }

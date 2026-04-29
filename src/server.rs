@@ -1,11 +1,9 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs, io,
-};
+use std::{collections::HashMap, fs, io, time::Duration};
 
 use tokio::{io::BufReader, net::UnixStream, sync::mpsc};
 
 use crate::{
+    cli::ServerOptions,
     editor::EditorState,
     events::{EditorCommand, EditorEvent, KeyInputEvent, RenderCommand, SceneUpdate},
     ipc::{bind_server_socket, connect_to_server, read_json_line, socket_path, write_json_line},
@@ -13,12 +11,23 @@ use crate::{
     protocol::{ClientId, ClientToServer, ServerToClient},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientConnectionState {
+    Connected,
+    Closing,
+}
+
+#[derive(Debug)]
+struct ClientConnection {
+    state: ClientConnectionState,
+    tx: mpsc::UnboundedSender<ServerToClient>,
+}
+
 #[derive(Debug)]
 pub struct EditorServer {
     editor: EditorState,
     next_client_id: u64,
-    clients: HashSet<ClientId>,
-    client_txs: HashMap<ClientId, mpsc::UnboundedSender<ServerToClient>>,
+    clients: HashMap<ClientId, ClientConnection>,
 }
 
 #[derive(Debug)]
@@ -38,8 +47,7 @@ impl Default for EditorServer {
         Self {
             editor: EditorState::default(),
             next_client_id: 1,
-            clients: HashSet::new(),
-            client_txs: HashMap::new(),
+            clients: HashMap::new(),
         }
     }
 }
@@ -52,13 +60,23 @@ impl EditorServer {
     }
 
     fn register_client(&mut self, client_id: ClientId, tx: mpsc::UnboundedSender<ServerToClient>) {
-        self.clients.insert(client_id);
-        self.client_txs.insert(client_id, tx);
+        self.clients.insert(
+            client_id,
+            ClientConnection {
+                state: ClientConnectionState::Connected,
+                tx,
+            },
+        );
+    }
+
+    fn mark_client_closing(&mut self, client_id: ClientId) {
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.state = ClientConnectionState::Closing;
+        }
     }
 
     fn remove_client(&mut self, client_id: ClientId) {
         self.clients.remove(&client_id);
-        self.client_txs.remove(&client_id);
     }
 
     fn scene_update(&self) -> SceneUpdate {
@@ -74,12 +92,27 @@ impl EditorServer {
         self.send_to_all(ServerToClient::Scene(self.scene_update()));
     }
 
+    fn send_to_client(&mut self, client_id: ClientId, message: ServerToClient) {
+        let should_remove = self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.tx.send(message).is_err());
+
+        if should_remove {
+            self.remove_client(client_id);
+        }
+    }
+
     fn send_to_all(&mut self, message: ServerToClient) {
         let dead_clients: Vec<ClientId> = self
-            .client_txs
+            .clients
             .iter()
-            .filter_map(|(client_id, tx)| {
-                if tx.send(message.clone()).is_err() {
+            .filter_map(|(client_id, client)| {
+                if client.state == ClientConnectionState::Closing {
+                    return None;
+                }
+
+                if client.tx.send(message.clone()).is_err() {
                     Some(*client_id)
                 } else {
                     None
@@ -101,9 +134,7 @@ impl EditorServer {
         match message {
             ClientToServer::Hello => {
                 println!("Server: client {client_id:?} said hello");
-                if let Some(tx) = self.client_txs.get(&client_id) {
-                    let _ = tx.send(ServerToClient::Scene(self.scene_update()));
-                }
+                self.send_to_client(client_id, ServerToClient::Scene(self.scene_update()));
             }
             ClientToServer::KeyInput(event) => {
                 println!("Server: key input from {client_id:?}: {event:?}");
@@ -134,12 +165,29 @@ impl EditorServer {
                 );
                 self.send_scene_update();
             }
-            ClientToServer::CloseClient { client_id } => {
+            ClientToServer::CloseClient {
+                client_id: requested_client_id,
+            } => {
+                if requested_client_id != client_id {
+                    self.send_to_client(
+                        client_id,
+                        ServerToClient::Error {
+                            message: format!(
+                                "client {client_id:?} cannot close {requested_client_id:?}"
+                            ),
+                        },
+                    );
+                }
+
                 println!("Server: client {client_id:?} requested close");
+                self.mark_client_closing(client_id);
                 self.remove_client(client_id);
             }
             ClientToServer::ShutdownServer => {
                 println!("Server: shutdown requested by {client_id:?}");
+                self.send_to_all(ServerToClient::ServerShuttingDown {
+                    reason: "server shutdown requested".into(),
+                });
                 return true;
             }
         }
@@ -148,14 +196,14 @@ impl EditorServer {
     }
 }
 
-pub fn run_foreground() -> Result<(), String> {
+pub fn run_foreground(options: ServerOptions) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|err| format!("failed to build server runtime: {err}"))?;
 
     runtime
-        .block_on(run_server())
+        .block_on(run_server(options))
         .map_err(|err| err.to_string())
 }
 
@@ -173,8 +221,9 @@ pub fn request_shutdown() -> Result<(), String> {
         .map_err(|err| format!("failed to request server shutdown: {err}"))
 }
 
-async fn run_server() -> io::Result<()> {
+async fn run_server(options: ServerOptions) -> io::Result<()> {
     let listener = bind_server_socket().await?;
+    let idle_timeout = options.idle_timeout_secs.map(Duration::from_secs);
     let path = socket_path();
     let (server_tx, mut server_rx) = mpsc::unbounded_channel::<ServerEvent>();
     let (js_event_tx, js_event_rx) = mpsc::unbounded_channel::<EditorEvent>();
@@ -183,9 +232,25 @@ async fn run_server() -> io::Result<()> {
     let mut server = EditorServer::default();
 
     println!("Server: listening on {}", path.display());
+    if let Some(timeout) = idle_timeout {
+        println!(
+            "Server: idle shutdown enabled after {} seconds with no connected clients",
+            timeout.as_secs()
+        );
+    }
+
+    let mut idle_deadline: Option<tokio::time::Instant> = None;
 
     let result = loop {
         tokio::select! {
+            _ = async {
+                if let Some(deadline) = idle_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                }
+            }, if idle_deadline.is_some() => {
+                println!("Server: idle timeout reached with no clients; shutting down");
+                break Ok(());
+            }
             accept_result = listener.accept() => {
                 let (stream, _) = match accept_result {
                     Ok(value) => value,
@@ -197,6 +262,7 @@ async fn run_server() -> io::Result<()> {
                 server.register_client(client_id, client_tx);
 
                 println!("Server: client {client_id:?} connected");
+                idle_deadline = None;
 
                 tokio::spawn(handle_client(client_id, stream, server_tx.clone(), client_rx));
             }
@@ -214,6 +280,10 @@ async fn run_server() -> io::Result<()> {
                     ServerEvent::ClientDisconnected { client_id } => {
                         server.remove_client(client_id);
                         println!("Server: client {client_id:?} disconnected");
+                        if server.clients.is_empty() {
+                            idle_deadline = idle_timeout
+                                .map(|timeout| tokio::time::Instant::now() + timeout);
+                        }
                     }
                     ServerEvent::JsRenderCommand(command) => {
                         println!("Server: render command from JS runtime: {command:?}");
@@ -399,6 +469,86 @@ mod tests {
     fn forwarding_policy_does_not_forward_rust_handled_keys() {
         let event = key_event("a", Some("a"));
         assert!(!should_forward_to_js_runtime(&event, true));
+    }
+
+    #[test]
+    fn broadcasts_editor_updates_to_all_connected_clients() {
+        let mut server = EditorServer::default();
+        let (client_1_tx, mut client_1_rx) = mpsc::unbounded_channel();
+        let (client_2_tx, mut client_2_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+
+        let client_1 = ClientId(1);
+        let client_2 = ClientId(2);
+        server.register_client(client_1, client_1_tx);
+        server.register_client(client_2, client_2_tx);
+
+        assert!(!server.handle_message(
+            client_1,
+            ClientToServer::Command(EditorCommand::InsertText { text: "x".into() }),
+            &js_tx,
+        ));
+
+        assert_eq!(
+            client_1_rx.try_recv(),
+            Ok(ServerToClient::Scene(SceneUpdate {
+                background_color: 0x1e1e2e,
+                text: "x".into(),
+                cursor_char_index: 1,
+                cursor_visible: true,
+            }))
+        );
+        assert_eq!(
+            client_2_rx.try_recv(),
+            Ok(ServerToClient::Scene(SceneUpdate {
+                background_color: 0x1e1e2e,
+                text: "x".into(),
+                cursor_char_index: 1,
+                cursor_visible: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn close_client_only_closes_the_sending_connection() {
+        let mut server = EditorServer::default();
+        let (client_1_tx, _client_1_rx) = mpsc::unbounded_channel();
+        let (client_2_tx, _client_2_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+
+        let client_1 = ClientId(1);
+        let client_2 = ClientId(2);
+        server.register_client(client_1, client_1_tx);
+        server.register_client(client_2, client_2_tx);
+
+        assert!(!server.handle_message(
+            client_1,
+            ClientToServer::CloseClient {
+                client_id: client_2,
+            },
+            &js_tx,
+        ));
+
+        assert!(!server.clients.contains_key(&client_1));
+        assert!(server.clients.contains_key(&client_2));
+    }
+
+    #[test]
+    fn shutdown_notifies_connected_clients() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(server.handle_message(client_id, ClientToServer::ShutdownServer, &js_tx));
+        assert_eq!(
+            client_rx.try_recv(),
+            Ok(ServerToClient::ServerShuttingDown {
+                reason: "server shutdown requested".into(),
+            })
+        );
     }
 
     #[test]

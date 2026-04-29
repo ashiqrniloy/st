@@ -136,6 +136,10 @@ fn spawn_ipc_thread(
                             Ok(Some(ServerToClient::Error { message })) => {
                                 eprintln!("Client: server error: {message}");
                             }
+                            Ok(Some(ServerToClient::ServerShuttingDown { reason })) => {
+                                println!("Client: server is shutting down: {reason}");
+                                break;
+                            }
                             Ok(None) => {
                                 println!("Client: server disconnected");
                                 break;
@@ -183,11 +187,15 @@ async fn connect_or_start_server() -> Result<UnixStream, String> {
 }
 
 fn start_server_process() -> Result<(), String> {
+    const AUTO_STARTED_IDLE_TIMEOUT_SECS: &str = "300";
+
     let current_exe = std::env::current_exe()
         .map_err(|err| format!("failed to determine current executable: {err}"))?;
 
     Command::new(current_exe)
         .arg("server")
+        .arg("--idle-timeout-secs")
+        .arg(AUTO_STARTED_IDLE_TIMEOUT_SECS)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

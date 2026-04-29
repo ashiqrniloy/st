@@ -2,348 +2,15 @@
 
 This document is intentionally only an ordered implementation checklist. Overall architecture and design rationale live in `README.md`.
 
-## Phase 1: Stabilize Current Modular Prototype
-
-Goal: keep the current single-process prototype working while preparing for client/server extraction.
-
-- [x] Refactor `src/main.rs` into modules.
-- [x] Add `src/app.rs`.
-- [x] Add `src/events.rs`.
-- [x] Add `src/editor.rs`.
-- [x] Add `src/render.rs`.
-- [x] Add `src/js_runtime.rs`.
-- [x] Remove old duplicate rendering module.
-- [x] Define temporary `RenderCommand`.
-- [x] Define `KeyInputEvent`.
-- [x] Define `EditorEvent`.
-- [x] Define `EditorCommand`.
-- [x] Define minimal `EditorState`.
-- [x] Implement insert text.
-- [x] Implement backspace.
-- [x] Implement cursor left/right.
-- [x] Implement cursor clamping.
-- [x] Add basic editor unit tests.
-- [ ] Decide short-term close behavior for single-process mode.
-- [ ] Remove or suppress expected dead-code warnings once server/client wiring uses the types.
-
-## Phase 2: Introduce Protocol Types
-
-Goal: separate in-process editor events from client/server protocol messages.
-
-- [x] Add `src/protocol.rs`.
-- [x] Define `ClientId`.
-- [x] Define `ClientToServer`.
-- [x] Define `ServerToClient`.
-- [x] Move IPC-facing message types into `protocol.rs`.
-- [x] Keep editor-internal types in `events.rs` for now.
-- [x] Add serde derives for protocol messages.
-- [x] Add tests for serializing/deserializing protocol messages.
-
-Initial protocol target:
-
-```rust
-pub enum ClientToServer {
-    Hello,
-    KeyInput(KeyInputEvent),
-    Command(EditorCommand),
-    CloseClient { client_id: ClientId },
-    ShutdownServer,
-}
-
-pub enum ServerToClient {
-    Welcome { client_id: ClientId },
-    Render(RenderCommand),
-    Error { message: String },
-}
-```
-
-## Phase 3: Add Local IPC Layer
-
-Goal: support process-to-process communication over a local socket.
-
-- [x] Add `src/ipc.rs`.
-- [x] Use a Unix domain socket as the first transport.
-- [x] Choose socket path, preferably `$XDG_RUNTIME_DIR/st/st.sock`.
-- [x] Add helper to compute socket path.
-- [x] Add helper to create parent runtime directory.
-- [x] Implement newline-delimited JSON message writing.
-- [x] Implement newline-delimited JSON message reading.
-- [x] Add client connect helper.
-- [x] Add server bind/listen helper.
-- [x] Handle stale socket files on server startup.
-- [x] Add tests for message encoding/decoding where practical.
-
-## Phase 4: Add CLI Routing
-
-Goal: make the binary able to run as server, client, or utility command.
-
-- [x] Add `src/cli.rs`.
-- [x] Parse basic subcommands without adding a CLI dependency yet.
-- [x] Support `st server`.
-- [x] Support `st client`.
-- [x] Support `st quit`.
-- [x] Make bare `st` behave like `st client`.
-- [x] Keep `main.rs` as top-level routing and error handling only.
-
-Target behavior:
-
-```bash
-cargo run -- server
-cargo run -- client
-cargo run -- quit
-cargo run
-```
-
-## Phase 5: Implement Minimal Server
-
-Goal: run a foreground server that accepts clients and logs messages.
-
-- [x] Add `src/server.rs`.
-- [x] Define `EditorServer`.
-- [x] Store `EditorState` in `EditorServer`.
-- [x] Accept multiple Unix socket clients.
-- [x] Assign each client a `ClientId`.
-- [x] Reply to `Hello` with `Welcome`.
-- [x] Log `KeyInput` messages on the server.
-- [x] Handle `CloseClient` by removing the client connection.
-- [x] Handle `ShutdownServer` by exiting the server loop.
-- [x] Ensure closing one client does not stop the server.
-
-Milestone:
-
-```text
-Terminal 1: cargo run -- server
-Terminal 2: cargo run -- client
-
-Client connects.
-Server assigns client id.
-Server logs received messages.
-Closing client leaves server running.
-cargo run -- quit stops server.
-```
-
-## Phase 6: Implement Minimal Client
-
-Goal: move the GPUI frontend into a client process connected to the server.
-
-- [x] Add `src/client.rs`.
-- [x] Move current UI startup from `app.rs` into client flow.
-- [x] Connect to running server over IPC.
-- [x] Send `Hello` on connect.
-- [x] Store assigned `ClientId` from `Welcome`.
-- [x] Send `KeyInput` messages to server instead of directly to Deno.
-- [x] Send `CloseClient` when the window closes.
-- [x] Exit the client process when the window closes.
-- [x] Keep server running after client exit.
-
-## Phase 7: Auto-Start Server From Client
-
-Goal: make `st` convenient for normal use.
-
-- [x] On client startup, try to connect to the server socket.
-- [x] If connect fails, spawn `st server` in the background.
-- [x] Wait for socket availability with timeout.
-- [x] Connect once the server is ready.
-- [x] Report clear error if server cannot be started.
-- [x] Avoid spawning duplicate servers when one already exists.
-
-Milestone:
-
-```text
-cargo run
-
-If no server exists:
-  server starts automatically
-  client connects
-  window opens
-```
-
-## Phase 8: Move Deno Runtime Behind Server
-
-Goal: ensure the extension runtime belongs to the server, not the UI client.
-
-- [x] Update `js_runtime.rs` to receive server-side editor events.
-- [x] Start Deno runtime from `server.rs`.
-- [x] Remove direct UI-to-Deno channel wiring from client code.
-- [x] Route client key input through server first.
-- [x] Forward relevant events from server to JS runtime.
-- [x] Keep JS runtime alive as long as the server is alive.
-- [x] Add graceful JS runtime shutdown when server shuts down.
-
-## Phase 9: Wire Commands Into EditorState
-
-Goal: make server-owned editor state mutate through Rust commands before refining Deno dispatch.
-
-- [x] Convert text key input into `EditorCommand::InsertText`.
-- [x] Convert Backspace into `EditorCommand::Backspace`.
-- [x] Convert left arrow into `EditorCommand::MoveCursorLeft`.
-- [x] Convert right arrow into `EditorCommand::MoveCursorRight`.
-- [x] Apply commands to server-owned `EditorState`.
-- [x] Add tests for key-input-to-command translation.
-- [x] Log updated buffer/cursor state after each command initially.
-
-Milestone:
-
-```text
-Client window receives keys.
-Server receives keys.
-Server mutates EditorState in Rust.
-Server logs buffer and cursor.
-```
-
-## Phase 10: Establish Server-First Input Dispatch Architecture
-
-Goal: refine the Phase 9 input path so ordinary typing is handled by Rust and Deno is not placed in the mandatory hot path.
-
-Target event forwarding flow already available from Phase 8:
-
-```text
-Client -> IPC -> Server -> JS Runtime
-```
-
-Important target architecture for input handling:
-
-```text
-OS/compositor -> focused UI client -> IPC -> Rust server core -> EditorState -> SceneUpdate -> client renderer
-```
-
-Deno should not be the mandatory hot path for every normal character typed. The client captures platform input because the OS delivers keyboard events to the focused window. The server should then handle ordinary editor behavior in Rust first. Deno participates when extensions, custom commands, keybindings, modes, or AI behavior need to observe or influence the event.
-
-Preferred long-term flow for ordinary typing:
-
-```text
-Client captures KeyInputEvent
-Server converts input to EditorCommand in Rust
-Server applies EditorCommand to EditorState
-Server produces SceneUpdate
-Client renders SceneUpdate
-```
-
-Preferred long-term flow for extension-customized behavior:
-
-```text
-Client captures KeyInputEvent
-Server checks Rust/editor keymap and extension registrations
-Server forwards selected events/commands to Deno when needed
-Deno requests typed EditorCommand
-Server validates and applies EditorCommand
-Server produces SceneUpdate
-Client renders SceneUpdate
-```
-
-Implementation tasks:
-
-- [x] Client captures focused-window key input.
-- [x] Client sends `KeyInputEvent` to server over IPC.
-- [x] Server receives key input before Deno.
-- [x] Server can forward selected events to Deno.
-- [x] Stop forwarding every ordinary `KeyInputEvent` to Deno by default.
-- [x] Handle ordinary printable text through Rust command application from Phase 9.
-- [x] Handle built-in editing keys through Rust command application from Phase 9.
-- [x] Add an explicit temporary policy for which events are still forwarded to Deno for logging/debugging.
-- [x] Document that extension keybindings later register with Rust before Deno is invoked.
-
-## Phase 11: Send Render Updates From Server To Client
-
-Goal: have server state drive client rendering.
-
-- [x] Add server-to-client render/update channel per connected client.
-- [x] After `EditorState` changes, produce temporary render output.
-- [x] Send `ServerToClient::Render` to the active client.
-- [x] Client receives render messages from IPC.
-- [x] Client applies render messages to GPUI view.
-- [x] Keep temporary rectangle rendering for now.
-- [x] Add cursor placeholder rendering.
-
-Milestone:
-
-```text
-Typing in client mutates server state.
-Server sends render update.
-Client redraws.
-```
-
-## Phase 12: Replace Temporary RenderCommand With Scene Updates
-
-Goal: stop treating JS/client rendering as raw drawing long-term.
-
-- [x] Define `Scene` or `SceneUpdate` type.
-- [x] Represent background.
-- [x] Represent text placeholders or glyph runs.
-- [x] Represent cursor.
-- [ ] Represent selections later.
-- [x] Replace most `RenderCommand` usage with `SceneUpdate`.
-- [x] Keep `RenderCommand` only if needed for temporary debugging.
-
-## Phase 13: Render Visible Text
-
-Goal: make the editor visibly editable.
-
-- [x] Choose short-term text rendering approach.
-- [x] Render buffer text in the client.
-- [x] Render cursor position.
-- [x] Handle newlines.
-- [x] Keep layout simple and fixed-width initially.
-- [x] Add placeholder scrolling only if necessary.
-
-Milestone:
-
-```text
-Open client.
-Type characters.
-Characters appear in the window.
-Backspace works.
-Cursor moves left/right.
-Server owns state.
-```
-
-## Phase 14: Replace Temporary Text Rendering With GPUI Native Editor View
-
-Goal: use GPUI's native text input and layout model instead of temporary `observe_keystrokes` plus inline cursor text rendering.
-
-Architectural rule: the client may use GPUI-native input APIs, but the server remains the canonical owner of editor state. The GPUI editor view is a focused input/rendering surface and local mirror, not the source of truth.
-
-- [x] Create a custom GPUI editor view for the text surface.
-- [x] Implement `Focusable` for the editor view.
-- [x] Store and use a `FocusHandle` for proper focus ownership.
-- [x] Replace global `observe_keystrokes` text editing with focused editor input handling.
-- [x] Implement `EntityInputHandler` for the editor view or backing input entity.
-- [x] Use `ElementInputHandler` during element paint via `window.handle_input(...)`.
-- [x] Support IME composition.
-- [x] Support marked text.
-- [x] Support selected text ranges.
-- [x] Support platform text replacement callbacks.
-- [x] Support clipboard semantics through GPUI/platform input paths.
-- [x] Provide text bounds for the OS via `bounds_for_range`.
-- [x] Provide mouse-to-character mapping via `character_index_for_point`.
-- [x] Use shaped text layout for visible text.
-- [x] Paint cursor separately from text content.
-- [x] Paint selections separately from text content.
-- [x] Stop rendering cursor by inserting a cursor character into display text.
-- [x] Convert GPUI input callbacks into IPC events/commands sent to the server.
-- [x] Apply server `SceneUpdate` responses back into the local editor view mirror.
-- [x] Add tests for client-side offset conversion helpers where practical.
-- [x] Keep server-owned `EditorState` as the canonical buffer.
-
-Milestone:
-
-```text
-Client editor surface owns focus correctly.
-Typing still goes through the server.
-IME/marked text/platform replacement paths are represented.
-Cursor and selections are painted separately.
-Server remains canonical state owner.
-```
-
-## Phase 15: Support Multiple Clients
+## Phase 1: Support Multiple Clients
 
 Goal: prove the client/server model is real.
 
-- [ ] Allow multiple clients to connect simultaneously.
-- [ ] Broadcast editor updates to all clients initially.
-- [ ] Track each client's connection state.
-- [ ] Handle one client disconnecting without affecting others.
-- [ ] Decide active view/client behavior later.
+- [x] Allow multiple clients to connect simultaneously.
+- [x] Broadcast editor updates to all clients initially.
+- [x] Track each client's connection state.
+- [x] Handle one client disconnecting without affecting others.
+- [x] Defer active view/client behavior until later.
 
 Milestone:
 
@@ -354,28 +21,28 @@ Both receive updates.
 Closing one leaves the other and server running.
 ```
 
-## Phase 16: Add Explicit Server Shutdown
+## Phase 2: Add Explicit Server Shutdown
 
 Goal: provide reliable lifecycle control.
 
-- [ ] Implement `st quit` fully.
-- [ ] Send `ShutdownServer` over IPC.
-- [ ] Server notifies clients before shutdown.
-- [ ] Clients exit or show disconnected state.
-- [ ] Server shuts down Deno runtime.
-- [ ] Server removes socket file on exit.
-- [ ] Server exits cleanly.
+- [x] Implement `st quit` fully.
+- [x] Send `ShutdownServer` over IPC.
+- [x] Server notifies clients before shutdown.
+- [x] Clients exit or show disconnected state.
+- [x] Server shuts down Deno runtime.
+- [x] Server removes socket file on exit.
+- [x] Server exits cleanly.
 
-## Phase 17: Add Optional Idle Shutdown
+## Phase 3: Add Optional Idle Shutdown
 
 Goal: avoid unwanted background daemons during early development.
 
-- [ ] Add configurable idle timeout.
-- [ ] Track connected client count.
-- [ ] If no clients remain for N seconds/minutes, shutdown server.
-- [ ] Disable idle shutdown when launched explicitly as long-running service.
+- [x] Add configurable idle timeout.
+- [x] Track connected client count.
+- [x] If no clients remain for N seconds/minutes, shutdown server.
+- [x] Disable idle shutdown when launched explicitly as long-running service.
 
-## Phase 18: Load JavaScript From Disk
+## Phase 4: Load JavaScript From Disk
 
 Goal: stop embedding JS source in Rust.
 
@@ -385,7 +52,7 @@ Goal: stop embedding JS source in Rust.
 - [ ] Report JS syntax/runtime errors clearly.
 - [ ] Keep server alive if JS fails to load.
 
-## Phase 19: JS Commands And Keybindings
+## Phase 5: JS Commands And Keybindings
 
 Goal: make the editor programmable while keeping Rust in control of command dispatch.
 
@@ -461,7 +128,7 @@ Implementation tasks:
 - [ ] Add tests for keymap resolution.
 - [ ] Add tests for Rust builtin vs JS command dispatch.
 
-## Phase 20: Manual Hot Reload
+## Phase 6: Manual Hot Reload
 
 Goal: reload JS without recompiling Rust.
 
@@ -471,7 +138,7 @@ Goal: reload JS without recompiling Rust.
 - [ ] Re-register commands/keybindings.
 - [ ] Report reload errors without crashing server or clients.
 
-## Phase 21: Extension Lifecycle
+## Phase 7: Extension Lifecycle
 
 Goal: prepare for real extensions.
 
@@ -481,7 +148,7 @@ Goal: prepare for real extensions.
 - [ ] Dispose resources on reload/unload.
 - [ ] Isolate activation errors.
 
-## Phase 22: File I/O
+## Phase 8: File I/O
 
 Goal: edit real files.
 
@@ -492,7 +159,7 @@ Goal: edit real files.
 - [ ] Handle file read/write errors.
 - [ ] Route file requests through server.
 
-## Phase 23: Undo/Redo
+## Phase 9: Undo/Redo
 
 Goal: make editing usable.
 
@@ -504,7 +171,7 @@ Goal: make editing usable.
 - [ ] Implement undo delete/backspace.
 - [ ] Add tests.
 
-## Phase 24: Better Buffer Data Structure
+## Phase 10: Better Buffer Data Structure
 
 Goal: support larger files.
 
@@ -514,7 +181,148 @@ Goal: support larger files.
 - [ ] Support multiple buffers.
 - [ ] Add line/column mapping.
 
-## Phase 25: Systemd Integration
+## Phase 11: Text Editing Features In Depth
+
+Goal: revisit editor text behavior comprehensively after core storage, file, and undo/redo primitives are stronger.
+
+- [ ] Define canonical server-side selection model.
+- [ ] Define editable vs read-only editor state.
+- [ ] Make editor state not editable/read-only.
+- [ ] Make editor state editable again.
+- [ ] Highlight a single letter.
+- [ ] Highlight a word.
+- [ ] Highlight a line.
+- [ ] Highlight a sentence.
+- [ ] Highlight multiple words.
+- [ ] Highlight multiple lines.
+- [ ] Highlight multiple sentences.
+- [ ] Traverse text by letter.
+- [ ] Traverse text by word.
+- [ ] Traverse text by line.
+- [ ] Traverse text by sentence.
+- [ ] Go to the beginning of a file.
+- [ ] Go to the end of a file.
+- [ ] Implement reliable arrow-key movement through the server-owned command path.
+- [ ] Implement reliable Shift+arrow selection through the server-owned command path.
+- [ ] Add Home/End and platform-specific variants.
+- [ ] Add PageUp/PageDown behavior.
+- [ ] Add mouse click, drag, double-click, and triple-click selection behavior.
+- [ ] Add tests for movement, selection expansion, and editability/read-only behavior.
+
+Milestone:
+
+```text
+Core text traversal, selection, and editability behavior is explicit, tested, and server-owned.
+```
+
+## Phase 12: Multi-Session Client Architecture
+
+Goal: support multiple independent clients on one server with separate sessions and editor state, while still allowing explicit shared-session attachment later. Implement the proper architecture directly, not a temporary shared-global-state workaround.
+
+Target ownership model:
+
+```text
+Server event loop
+  owns Client registry
+  owns Session registry
+  owns Buffer/editor state
+
+Per-client Tokio task
+  owns socket read/write halves
+  does IPC only
+  never owns editor state
+
+ClientId
+  one IPC connection / one UI window
+
+SessionId
+  one independent editor workspace
+
+BufferId
+  one text buffer/file within a session
+```
+
+Target Tokio concurrency model:
+
+```text
+UnixListener accept loop
+  -> accepts sockets
+  -> allocates ClientId
+  -> creates per-client outbound channel
+  -> spawns one Tokio task per client connection
+  -> sends ServerEvent::ClientConnected into central server channel
+
+Per-client Tokio task
+  -> reads ClientToServer messages from socket
+  -> sends ServerEvent::ClientMessage { client_id, message } to central server channel
+  -> receives ServerToClient messages from its own outbound channel
+  -> writes those messages to the socket
+  -> sends ServerEvent::ClientDisconnected when socket closes/errors
+
+Central server event loop
+  -> is the only owner/mutator of clients, sessions, buffers, and editor state
+  -> receives ServerEvent values from client tasks
+  -> mutates state synchronously and quickly
+  -> sends outbound messages by enqueueing into per-client channels
+  -> never awaits socket I/O while holding or mutating editor state
+```
+
+Implementation tasks:
+
+- [ ] Define `SessionId` in the protocol or a dedicated IDs module.
+- [ ] Define `BufferId` in the protocol or a dedicated IDs module.
+- [ ] Document ID roles: `ClientId` is a connection, `SessionId` is a workspace, `BufferId` is text/file state.
+- [ ] Add `ClientConnection { session_id, state, tx }`.
+- [ ] Add `ClientConnectionState` with at least `Connected` and `Closing`.
+- [ ] Add `EditorSession { active_buffer_id, buffers, ... }`.
+- [ ] Add `EditorBuffer { editor_state, path, dirty, ... }` or equivalent.
+- [ ] Move canonical `EditorState` out of `EditorServer` root into per-session/per-buffer state.
+- [ ] Store clients in `HashMap<ClientId, ClientConnection>`.
+- [ ] Store sessions in `HashMap<SessionId, EditorSession>`.
+- [ ] Add server counters/allocators for `ClientId`, `SessionId`, and `BufferId`.
+- [ ] On client connect without an attach target, create a new `SessionId` and initial scratch `BufferId`.
+- [ ] Associate that client with its new independent session.
+- [ ] Send `Welcome` with enough metadata for the client to know its `ClientId` and active session once protocol supports it.
+- [ ] Add explicit attach semantics in the protocol, for example `ClientToServer::AttachSession { session_id }`.
+- [ ] Validate attach requests and return a protocol error if the session does not exist or is not attachable.
+- [ ] Allow multiple clients to point at the same `SessionId` only through explicit attach behavior.
+- [ ] Route `KeyInput` by looking up `client_id -> session_id -> active_buffer_id -> EditorState`.
+- [ ] Route `Command` by looking up `client_id -> session_id -> active_buffer_id -> EditorState`.
+- [ ] Generate `SceneUpdate` from the changed session/buffer only.
+- [ ] Send scene updates only to clients whose `ClientConnection.session_id` matches the changed session.
+- [ ] Remove global editor-state broadcasting.
+- [ ] Keep independent per-client outbound `mpsc` channels.
+- [ ] Make outbound sends from the central server loop non-blocking channel sends only.
+- [ ] If a client's outbound channel is closed, mark/remove that client without affecting other clients.
+- [ ] Do not wrap the entire server/editor state in a shared mutex used by client tasks.
+- [ ] Do not let client tasks mutate sessions or buffers directly.
+- [ ] Do not hold server/editor state across `.await` points for socket reads or writes.
+- [ ] Decide and implement session lifecycle policy for disconnected clients.
+- [ ] Preserve unattached sessions only if they are explicitly retained, named, dirty, or attached by future behavior.
+- [ ] Destroy empty scratch sessions when their last client disconnects if they are not retained.
+- [ ] Ensure closing one client removes only that `ClientId` and possibly its unretained empty session.
+- [ ] Ensure closing one client never shuts down the server.
+- [ ] Add unit tests for ID allocation and client/session association.
+- [ ] Add unit tests for independent client sessions.
+- [ ] Add unit tests for explicit shared-session attachment.
+- [ ] Add unit tests that updates are session-scoped, not global.
+- [ ] Add unit tests that a disconnected client is removed without affecting unrelated clients/sessions.
+- [ ] Add an integration/manual test recipe: open two clients, type different text, verify they diverge.
+- [ ] Add an integration/manual test recipe: explicitly attach a second client to an existing session, type once, verify both attached clients update.
+
+Milestone:
+
+```text
+Open two clients.
+Each gets an independent session by default.
+Typing in one does not affect the other.
+Explicitly attached clients share only that session's updates.
+One slow or closed client does not block another client.
+The central server event loop remains the only owner of canonical editor state.
+Per-client Tokio tasks perform IPC only.
+```
+
+## Phase 13: Systemd Integration
 
 Goal: allow persistent background server operation.
 
@@ -523,11 +331,11 @@ Goal: allow persistent background server operation.
 - [ ] Decide whether `st server --daemon` is needed or systemd is enough.
 - [ ] Ensure socket path and cleanup work under systemd.
 
-## Phase 26: Adopt GPUI Component For Non-Editor UI
+## Phase 14: Adopt GPUI Component For Non-Editor UI
 
 Goal: improve application chrome and supporting UI using `gpui-component` without replacing the custom server-backed editor surface.
 
-Explicit boundary: `gpui-component` is not used for the editor itself. The editor remains our custom GPUI native editor view from Phase 14, backed by server-owned editor state.
+Explicit boundary: `gpui-component` is not used for the editor itself. The editor remains our custom GPUI native editor view, backed by server-owned editor state.
 
 Use `gpui-component` only for:
 
@@ -550,7 +358,143 @@ Implementation tasks:
 - [ ] Keep editor buffer, cursor, selections, undo/redo, and key dispatch outside `gpui-component::InputState`.
 - [ ] Document which UI surfaces are allowed to use `gpui-component`.
 
-## Phase 27: Permissions And AI Layer
+## Phase 15: Extension And Agent Runtime Architecture
+
+Goal: use one JS runtime for normal editor programmability and isolated per-agent JS runtimes for long-running or blocking agent work. Implement the final runtime separation model directly so blocked agent code cannot freeze normal editor behavior.
+
+Target runtime model:
+
+```text
+Server event loop
+  owns canonical clients/sessions/buffers/editor state
+  owns command registry and keymap
+  validates all mutations
+
+Editor extension runtime
+  one deno_core::JsRuntime
+  lightweight editor programmability only
+  commands, keybindings, themes, modes, lightweight hooks
+  must not run long-running agents
+
+Agent runtime workers
+  one worker per active agent
+  one deno_core::JsRuntime per worker
+  one V8 isolate/event loop per agent
+  communicates with server through channels
+  never directly mutates editor state
+```
+
+Target message flow for normal editor JS:
+
+```text
+Client input
+  -> Server keymap/command dispatch
+  -> Rust builtin command OR editor JS command
+  -> JS command returns a typed request/result
+  -> Server validates
+  -> Server mutates editor/session/buffer state
+  -> Server emits SceneUpdate
+```
+
+Target message flow for agents:
+
+```text
+User starts agent
+  -> Server allocates AgentId
+  -> Server creates AgentRuntimeWorker
+  -> Worker starts its own deno_core::JsRuntime
+  -> Server sends immutable context snapshots / typed tool requests
+  -> Agent returns proposed edits/tool requests/logs/errors
+  -> Server validates every requested mutation
+  -> Server applies accepted commands
+  -> Server emits SceneUpdate
+```
+
+Tokio/threading requirements:
+
+```text
+Central server event loop
+  - must not execute JavaScript inline
+  - must not block on agent completion
+  - must communicate with runtimes through channels
+
+Editor runtime worker
+  - owns the single normal editor JsRuntime
+  - processes lightweight extension requests sequentially
+  - returns results to the server through channels
+
+Agent runtime worker
+  - owns exactly one agent JsRuntime
+  - runs independently from the editor runtime and other agents
+  - may be a Tokio task if compatible with JsRuntime ownership requirements
+  - may be a dedicated OS thread if runtime !Send/!Sync constraints require it
+  - communicates by mpsc/oneshot channels only
+```
+
+Implementation tasks:
+
+- [ ] Define `AgentId`.
+- [ ] Define `RuntimeRequestId` for correlating async runtime requests/responses.
+- [ ] Define `EditorRuntimeRequest` and `EditorRuntimeResponse`.
+- [ ] Define `AgentRuntimeRequest` and `AgentRuntimeResponse`.
+- [ ] Define typed agent outputs: proposed edit, command request, tool request, log, error, completion.
+- [ ] Define immutable context snapshot types for sessions/buffers/selections.
+- [ ] Keep one normal editor `deno_core::JsRuntime` for lightweight extension operations.
+- [ ] Restrict the normal editor runtime to commands, keybindings, themes, modes, and lightweight hooks.
+- [ ] Explicitly reject or route long-running agent work away from the normal editor runtime.
+- [ ] Add an `EditorRuntimeWorker` abstraction that owns the normal editor runtime.
+- [ ] Start the editor runtime worker outside the central server event loop.
+- [ ] Communicate with the editor runtime worker through request/response channels.
+- [ ] Ensure the central server event loop does not call `JsRuntime::run_event_loop` directly.
+- [ ] Ensure the central server event loop never waits synchronously for JS to finish.
+- [ ] Add an `AgentRuntimeWorker` abstraction.
+- [ ] Start one `AgentRuntimeWorker` per active agent.
+- [ ] Start one `deno_core::JsRuntime` inside each agent worker.
+- [ ] Ensure each agent runtime has its own V8 isolate and event loop.
+- [ ] Store active agents in `HashMap<AgentId, AgentHandle>` on the server.
+- [ ] `AgentHandle` should contain request sender, lifecycle state, and cancellation handle.
+- [ ] Send only immutable snapshots or typed requests from server state into agent workers.
+- [ ] Require agents to return typed proposed changes instead of mutating state directly.
+- [ ] Validate all agent-requested edits/commands in Rust before applying them.
+- [ ] Route accepted agent edits through the same transaction/undo command path as user edits.
+- [ ] Never hold server/editor/session/buffer state while executing JavaScript.
+- [ ] Never expose direct mutable Rust editor state references to JS.
+- [ ] Ensure blocked normal editor JS cannot block socket IPC tasks.
+- [ ] Ensure blocked normal editor JS cannot corrupt server state.
+- [ ] Ensure blocked agent JS cannot block the normal editor runtime.
+- [ ] Ensure blocked agent JS cannot block unrelated agent runtimes.
+- [ ] Ensure blocked agent JS cannot block client IPC tasks.
+- [ ] Add cancellation messages for running agents.
+- [ ] Add timeout handling for agent requests and tool calls.
+- [ ] Add runtime cleanup when an agent completes normally.
+- [ ] Add runtime cleanup when an agent errors.
+- [ ] Add runtime cleanup when an agent is cancelled.
+- [ ] Add runtime cleanup when the server shuts down.
+- [ ] Add structured logging for runtime start, request, response, error, cancellation, and shutdown.
+- [ ] Add resource accounting hooks for CPU time, memory, tool usage, and token usage where practical.
+- [ ] Add a policy hook for maximum concurrent agents.
+- [ ] Add a policy hook for maximum runtime duration per agent.
+- [ ] Add a policy hook for maximum pending requests per agent.
+- [ ] Define the future migration path from per-agent runtime workers to per-agent OS processes for stronger isolation.
+- [ ] Add tests for normal editor runtime request/response dispatch.
+- [ ] Add tests for independent agent runtime request/response dispatch.
+- [ ] Add tests that a blocked agent does not block normal editor JS commands.
+- [ ] Add tests that a blocked agent does not block another agent.
+- [ ] Add tests that cancelling one agent does not cancel unrelated agents.
+- [ ] Add tests that agent-proposed invalid edits are rejected by the server.
+- [ ] Add tests that accepted agent edits produce normal transactions and scene updates.
+
+Milestone:
+
+```text
+Normal editor extensions share one lightweight JS runtime.
+Each active agent has an isolated JS runtime with its own V8 isolate/event loop.
+The server event loop never executes JavaScript inline.
+Blocked or slow agent code does not block editor commands, clients, or other agents.
+All mutations still go through validated Rust server commands and normal edit transactions.
+```
+
+## Phase 16: Permissions And AI Layer
 
 Goal: add advanced features safely after the editor core works.
 

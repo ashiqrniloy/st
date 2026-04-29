@@ -13,7 +13,7 @@ use cli::CliCommand;
 fn main() {
     let result = match CliCommand::parse() {
         Ok(CliCommand::Client) => client::run(),
-        Ok(CliCommand::Server) => server::run_foreground(),
+        Ok(CliCommand::Server(options)) => server::run_foreground(options),
         Ok(CliCommand::Quit) => server::request_shutdown(),
         Err(message) => Err(message),
     };
