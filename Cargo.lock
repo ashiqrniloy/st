@@ -5234,6 +5234,7 @@ dependencies = [
  "deno_error",
  "gpui",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

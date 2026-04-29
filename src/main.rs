@@ -1,30 +1,25 @@
-mod editor_core;
-mod rendering;
+mod cli;
+mod client;
+mod editor;
+mod events;
+mod ipc;
+mod js_runtime;
+mod protocol;
+mod render;
+mod server;
 
-use tokio::sync::mpsc as tokio_mpsc;
-
-use crate::{
-    editor_core::{RenderCommand, UiEvent, spawn_js_runtime},
-    rendering::{UiChannels, run_ui_with_gpui},
-};
+use cli::CliCommand;
 
 fn main() {
-    let (ui_tx, ui_rx_deno) = tokio_mpsc::unbounded_channel::<UiEvent>();
-    let (logic_tx, render_rx) = tokio_mpsc::unbounded_channel::<RenderCommand>();
+    let result = match CliCommand::parse() {
+        Ok(CliCommand::Client) => client::run(),
+        Ok(CliCommand::Server) => server::run_foreground(),
+        Ok(CliCommand::Quit) => server::request_shutdown(),
+        Err(message) => Err(message),
+    };
 
-    let js_thread = spawn_js_runtime(ui_rx_deno, logic_tx);
-
-    println!("Initializing GPUI window...");
-
-    let ui_result = run_ui_with_gpui(UiChannels { ui_tx, render_rx });
-
-    if let Err(err) = ui_result {
-        eprintln!("UI error: {err}");
-        std::process::exit(1);
-    }
-
-    if let Err(err) = js_thread.join() {
-        eprintln!("Logic thread panicked: {:?}", err);
+    if let Err(err) = result {
+        eprintln!("{err}");
         std::process::exit(1);
     }
 }

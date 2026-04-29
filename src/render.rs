@@ -2,13 +2,24 @@ use gpui::{
     App, Application, Bounds, Context, Window, WindowBounds, WindowOptions, canvas, div, fill,
     point, prelude::*, px, rgb, size,
 };
+use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::{
-    editor_core::{RenderCommand, UiEvent},
-    rendering::{UiChannels, UiRenderer},
-};
+use crate::events::{EditorEvent, KeyInputEvent, RenderCommand};
 
-pub struct GpuiRenderer;
+pub struct UiChannels {
+    pub ui_tx: tokio_mpsc::UnboundedSender<EditorEvent>,
+    pub render_rx: tokio_mpsc::UnboundedReceiver<RenderCommand>,
+}
+
+pub fn run_ui_with_gpui(channels: UiChannels) -> Result<(), String> {
+    GpuiRenderer.run(channels)
+}
+
+trait UiRenderer {
+    fn run(self, channels: UiChannels) -> Result<(), String>;
+}
+
+struct GpuiRenderer;
 
 #[derive(Clone, Debug)]
 struct RectPrimitive {
@@ -58,8 +69,10 @@ impl Render for RootView {
 impl UiRenderer for GpuiRenderer {
     fn run(self, channels: UiChannels) -> Result<(), String> {
         Application::new().run(move |cx: &mut App| {
-            cx.on_window_closed(|cx| {
+            let close_tx = channels.ui_tx.clone();
+            cx.on_window_closed(move |cx| {
                 if cx.windows().is_empty() {
+                    let _ = close_tx.send(EditorEvent::Shutdown);
                     cx.quit();
                 }
             })
@@ -98,11 +111,23 @@ impl UiRenderer for GpuiRenderer {
             };
 
             cx.observe_keystrokes(move |ev, _window, _cx| {
-                if let Some(key_char) = ev.keystroke.key_char.as_ref()
-                    && let Some(c) = key_char.chars().next()
-                {
-                    let _ = ui_tx.send(UiEvent::KeyPress(c));
-                }
+                let text = ev.keystroke.key_char.clone();
+                let logical_key = text
+                    .clone()
+                    .unwrap_or_else(|| format!("{:?}", ev.keystroke));
+
+                let key_event = KeyInputEvent {
+                    logical_key,
+                    physical_key: String::new(),
+                    text,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    meta: false,
+                    repeat: false,
+                };
+
+                let _ = ui_tx.send(EditorEvent::KeyInput(key_event));
             })
             .detach();
 
