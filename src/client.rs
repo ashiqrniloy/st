@@ -8,7 +8,7 @@ use std::{
 use tokio::{io::BufReader, net::UnixStream, sync::mpsc as tokio_mpsc, time::sleep};
 
 use crate::{
-    events::{EditorEvent, RenderCommand},
+    events::{EditorEvent, SceneUpdate},
     ipc::{connect_to_server, read_json_line, socket_path, write_json_line},
     protocol::{ClientId, ClientToServer, ServerToClient},
     render::{UiChannels, run_ui_with_gpui},
@@ -16,10 +16,10 @@ use crate::{
 
 pub fn run() -> Result<(), String> {
     let (ui_tx, ui_rx) = tokio_mpsc::unbounded_channel::<EditorEvent>();
-    let (render_tx, render_rx) = tokio_mpsc::unbounded_channel::<RenderCommand>();
+    let (scene_tx, scene_rx) = tokio_mpsc::unbounded_channel::<SceneUpdate>();
     let (welcome_tx, welcome_rx) = std_mpsc::channel::<Result<ClientId, String>>();
 
-    let ipc_thread = spawn_ipc_thread(ui_rx, render_tx, welcome_tx);
+    let ipc_thread = spawn_ipc_thread(ui_rx, scene_tx, welcome_tx);
 
     let client_id = welcome_rx
         .recv()
@@ -27,7 +27,7 @@ pub fn run() -> Result<(), String> {
 
     println!("Client: connected as {client_id:?}");
 
-    let ui_result = run_ui_with_gpui(UiChannels { ui_tx, render_rx });
+    let ui_result = run_ui_with_gpui(UiChannels { ui_tx, scene_rx });
 
     if let Err(err) = ipc_thread.join() {
         return Err(format!("client IPC thread panicked: {err:?}"));
@@ -38,7 +38,7 @@ pub fn run() -> Result<(), String> {
 
 fn spawn_ipc_thread(
     mut ui_rx: tokio_mpsc::UnboundedReceiver<EditorEvent>,
-    render_tx: tokio_mpsc::UnboundedSender<RenderCommand>,
+    scene_tx: tokio_mpsc::UnboundedSender<SceneUpdate>,
     welcome_tx: std_mpsc::Sender<Result<ClientId, String>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
@@ -127,8 +127,11 @@ fn spawn_ipc_thread(
                             Ok(Some(ServerToClient::Welcome { client_id })) => {
                                 println!("Client: unexpected second welcome for {client_id:?}");
                             }
+                            Ok(Some(ServerToClient::Scene(scene))) => {
+                                let _ = scene_tx.send(scene);
+                            }
                             Ok(Some(ServerToClient::Render(command))) => {
-                                let _ = render_tx.send(command);
+                                println!("Client: received debug render command: {command:?}");
                             }
                             Ok(Some(ServerToClient::Error { message })) => {
                                 eprintln!("Client: server error: {message}");

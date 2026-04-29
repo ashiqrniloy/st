@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::events::{EditorCommand, KeyInputEvent, RenderCommand};
+use crate::events::{EditorCommand, KeyInputEvent, RenderCommand, SceneUpdate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClientId(pub u64);
@@ -17,6 +17,7 @@ pub enum ClientToServer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerToClient {
     Welcome { client_id: ClientId },
+    Scene(SceneUpdate),
     Render(RenderCommand),
     Error { message: String },
 }
@@ -72,6 +73,21 @@ mod tests {
         let json = serde_json::to_string(&message).expect("serialize render message");
         let decoded: ServerToClient =
             serde_json::from_str(&json).expect("deserialize render message");
+
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn scene_message_round_trips_through_json() {
+        let message = ServerToClient::Scene(SceneUpdate {
+            background_color: 0x1e1e2e,
+            text: "abc".into(),
+            cursor_char_index: 2,
+            cursor_visible: true,
+        });
+        let json = serde_json::to_string(&message).expect("serialize scene message");
+        let decoded: ServerToClient =
+            serde_json::from_str(&json).expect("deserialize scene message");
 
         assert_eq!(decoded, message);
     }

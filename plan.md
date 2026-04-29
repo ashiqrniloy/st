@@ -174,13 +174,13 @@ Goal: ensure the extension runtime belongs to the server, not the UI client.
 
 Goal: make server-owned editor state mutate through Rust commands before refining Deno dispatch.
 
-- [ ] Convert text key input into `EditorCommand::InsertText`.
-- [ ] Convert Backspace into `EditorCommand::Backspace`.
-- [ ] Convert left arrow into `EditorCommand::MoveCursorLeft`.
-- [ ] Convert right arrow into `EditorCommand::MoveCursorRight`.
-- [ ] Apply commands to server-owned `EditorState`.
-- [ ] Add tests for key-input-to-command translation.
-- [ ] Log updated buffer/cursor state after each command initially.
+- [x] Convert text key input into `EditorCommand::InsertText`.
+- [x] Convert Backspace into `EditorCommand::Backspace`.
+- [x] Convert left arrow into `EditorCommand::MoveCursorLeft`.
+- [x] Convert right arrow into `EditorCommand::MoveCursorRight`.
+- [x] Apply commands to server-owned `EditorState`.
+- [x] Add tests for key-input-to-command translation.
+- [x] Log updated buffer/cursor state after each command initially.
 
 Milestone:
 
@@ -237,23 +237,23 @@ Implementation tasks:
 - [x] Client sends `KeyInputEvent` to server over IPC.
 - [x] Server receives key input before Deno.
 - [x] Server can forward selected events to Deno.
-- [ ] Stop forwarding every ordinary `KeyInputEvent` to Deno by default.
-- [ ] Handle ordinary printable text through Rust command application from Phase 9.
-- [ ] Handle built-in editing keys through Rust command application from Phase 9.
-- [ ] Add an explicit temporary policy for which events are still forwarded to Deno for logging/debugging.
-- [ ] Document that extension keybindings later register with Rust before Deno is invoked.
+- [x] Stop forwarding every ordinary `KeyInputEvent` to Deno by default.
+- [x] Handle ordinary printable text through Rust command application from Phase 9.
+- [x] Handle built-in editing keys through Rust command application from Phase 9.
+- [x] Add an explicit temporary policy for which events are still forwarded to Deno for logging/debugging.
+- [x] Document that extension keybindings later register with Rust before Deno is invoked.
 
 ## Phase 11: Send Render Updates From Server To Client
 
 Goal: have server state drive client rendering.
 
-- [ ] Add server-to-client render/update channel per connected client.
-- [ ] After `EditorState` changes, produce temporary render output.
-- [ ] Send `ServerToClient::Render` to the active client.
-- [ ] Client receives render messages from IPC.
-- [ ] Client applies render messages to GPUI view.
-- [ ] Keep temporary rectangle rendering for now.
-- [ ] Add cursor placeholder rendering.
+- [x] Add server-to-client render/update channel per connected client.
+- [x] After `EditorState` changes, produce temporary render output.
+- [x] Send `ServerToClient::Render` to the active client.
+- [x] Client receives render messages from IPC.
+- [x] Client applies render messages to GPUI view.
+- [x] Keep temporary rectangle rendering for now.
+- [x] Add cursor placeholder rendering.
 
 Milestone:
 
@@ -267,24 +267,24 @@ Client redraws.
 
 Goal: stop treating JS/client rendering as raw drawing long-term.
 
-- [ ] Define `Scene` or `SceneUpdate` type.
-- [ ] Represent background.
-- [ ] Represent text placeholders or glyph runs.
-- [ ] Represent cursor.
+- [x] Define `Scene` or `SceneUpdate` type.
+- [x] Represent background.
+- [x] Represent text placeholders or glyph runs.
+- [x] Represent cursor.
 - [ ] Represent selections later.
-- [ ] Replace most `RenderCommand` usage with `SceneUpdate`.
-- [ ] Keep `RenderCommand` only if needed for temporary debugging.
+- [x] Replace most `RenderCommand` usage with `SceneUpdate`.
+- [x] Keep `RenderCommand` only if needed for temporary debugging.
 
 ## Phase 13: Render Visible Text
 
 Goal: make the editor visibly editable.
 
-- [ ] Choose short-term text rendering approach.
-- [ ] Render buffer text in the client.
-- [ ] Render cursor position.
-- [ ] Handle newlines.
-- [ ] Keep layout simple and fixed-width initially.
-- [ ] Add placeholder scrolling only if necessary.
+- [x] Choose short-term text rendering approach.
+- [x] Render buffer text in the client.
+- [x] Render cursor position.
+- [x] Handle newlines.
+- [x] Keep layout simple and fixed-width initially.
+- [x] Add placeholder scrolling only if necessary.
 
 Milestone:
 
@@ -297,7 +297,45 @@ Cursor moves left/right.
 Server owns state.
 ```
 
-## Phase 14: Support Multiple Clients
+## Phase 14: Replace Temporary Text Rendering With GPUI Native Editor View
+
+Goal: use GPUI's native text input and layout model instead of temporary `observe_keystrokes` plus inline cursor text rendering.
+
+Architectural rule: the client may use GPUI-native input APIs, but the server remains the canonical owner of editor state. The GPUI editor view is a focused input/rendering surface and local mirror, not the source of truth.
+
+- [x] Create a custom GPUI editor view for the text surface.
+- [x] Implement `Focusable` for the editor view.
+- [x] Store and use a `FocusHandle` for proper focus ownership.
+- [x] Replace global `observe_keystrokes` text editing with focused editor input handling.
+- [x] Implement `EntityInputHandler` for the editor view or backing input entity.
+- [x] Use `ElementInputHandler` during element paint via `window.handle_input(...)`.
+- [x] Support IME composition.
+- [x] Support marked text.
+- [x] Support selected text ranges.
+- [x] Support platform text replacement callbacks.
+- [x] Support clipboard semantics through GPUI/platform input paths.
+- [x] Provide text bounds for the OS via `bounds_for_range`.
+- [x] Provide mouse-to-character mapping via `character_index_for_point`.
+- [x] Use shaped text layout for visible text.
+- [x] Paint cursor separately from text content.
+- [x] Paint selections separately from text content.
+- [x] Stop rendering cursor by inserting a cursor character into display text.
+- [x] Convert GPUI input callbacks into IPC events/commands sent to the server.
+- [x] Apply server `SceneUpdate` responses back into the local editor view mirror.
+- [x] Add tests for client-side offset conversion helpers where practical.
+- [x] Keep server-owned `EditorState` as the canonical buffer.
+
+Milestone:
+
+```text
+Client editor surface owns focus correctly.
+Typing still goes through the server.
+IME/marked text/platform replacement paths are represented.
+Cursor and selections are painted separately.
+Server remains canonical state owner.
+```
+
+## Phase 15: Support Multiple Clients
 
 Goal: prove the client/server model is real.
 
@@ -316,7 +354,7 @@ Both receive updates.
 Closing one leaves the other and server running.
 ```
 
-## Phase 15: Add Explicit Server Shutdown
+## Phase 16: Add Explicit Server Shutdown
 
 Goal: provide reliable lifecycle control.
 
@@ -328,7 +366,7 @@ Goal: provide reliable lifecycle control.
 - [ ] Server removes socket file on exit.
 - [ ] Server exits cleanly.
 
-## Phase 16: Add Optional Idle Shutdown
+## Phase 17: Add Optional Idle Shutdown
 
 Goal: avoid unwanted background daemons during early development.
 
@@ -337,7 +375,7 @@ Goal: avoid unwanted background daemons during early development.
 - [ ] If no clients remain for N seconds/minutes, shutdown server.
 - [ ] Disable idle shutdown when launched explicitly as long-running service.
 
-## Phase 17: Load JavaScript From Disk
+## Phase 18: Load JavaScript From Disk
 
 Goal: stop embedding JS source in Rust.
 
@@ -347,7 +385,7 @@ Goal: stop embedding JS source in Rust.
 - [ ] Report JS syntax/runtime errors clearly.
 - [ ] Keep server alive if JS fails to load.
 
-## Phase 18: JS Commands And Keybindings
+## Phase 19: JS Commands And Keybindings
 
 Goal: make the editor programmable while keeping Rust in control of command dispatch.
 
@@ -407,6 +445,7 @@ pub struct Keymap {
 Implementation tasks:
 
 - [ ] Define `KeyChord` normalized from `KeyInputEvent`.
+- [ ] Implement modified-key chord handling (Ctrl/Alt/Meta and multi-key chords) through Rust keymap dispatch.
 - [ ] Define command registry structure in Rust server.
 - [ ] Define keymap structure in Rust server.
 - [ ] Define `CommandHandler::RustBuiltin`.
@@ -422,7 +461,7 @@ Implementation tasks:
 - [ ] Add tests for keymap resolution.
 - [ ] Add tests for Rust builtin vs JS command dispatch.
 
-## Phase 19: Manual Hot Reload
+## Phase 20: Manual Hot Reload
 
 Goal: reload JS without recompiling Rust.
 
@@ -432,7 +471,7 @@ Goal: reload JS without recompiling Rust.
 - [ ] Re-register commands/keybindings.
 - [ ] Report reload errors without crashing server or clients.
 
-## Phase 20: Extension Lifecycle
+## Phase 21: Extension Lifecycle
 
 Goal: prepare for real extensions.
 
@@ -442,7 +481,7 @@ Goal: prepare for real extensions.
 - [ ] Dispose resources on reload/unload.
 - [ ] Isolate activation errors.
 
-## Phase 21: File I/O
+## Phase 22: File I/O
 
 Goal: edit real files.
 
@@ -453,7 +492,7 @@ Goal: edit real files.
 - [ ] Handle file read/write errors.
 - [ ] Route file requests through server.
 
-## Phase 22: Undo/Redo
+## Phase 23: Undo/Redo
 
 Goal: make editing usable.
 
@@ -465,7 +504,7 @@ Goal: make editing usable.
 - [ ] Implement undo delete/backspace.
 - [ ] Add tests.
 
-## Phase 23: Better Buffer Data Structure
+## Phase 24: Better Buffer Data Structure
 
 Goal: support larger files.
 
@@ -475,7 +514,7 @@ Goal: support larger files.
 - [ ] Support multiple buffers.
 - [ ] Add line/column mapping.
 
-## Phase 24: Systemd Integration
+## Phase 25: Systemd Integration
 
 Goal: allow persistent background server operation.
 
@@ -484,7 +523,34 @@ Goal: allow persistent background server operation.
 - [ ] Decide whether `st server --daemon` is needed or systemd is enough.
 - [ ] Ensure socket path and cleanup work under systemd.
 
-## Phase 25: Permissions And AI Layer
+## Phase 26: Adopt GPUI Component For Non-Editor UI
+
+Goal: improve application chrome and supporting UI using `gpui-component` without replacing the custom server-backed editor surface.
+
+Explicit boundary: `gpui-component` is not used for the editor itself. The editor remains our custom GPUI native editor view from Phase 14, backed by server-owned editor state.
+
+Use `gpui-component` only for:
+
+- [ ] Command palette.
+- [ ] Buttons.
+- [ ] Dialogs.
+- [ ] Settings.
+- [ ] Panels.
+- [ ] Tabs.
+- [ ] Status bar.
+- [ ] Menus.
+- [ ] Notifications.
+- [ ] Dock layout.
+
+Implementation tasks:
+
+- [ ] Add `gpui-component` dependency only after editor core/client-server rendering is stable.
+- [ ] Call `gpui_component::init(cx)` during GPUI app startup.
+- [ ] Wrap the application root as required for overlays/dialogs/notifications.
+- [ ] Keep editor buffer, cursor, selections, undo/redo, and key dispatch outside `gpui-component::InputState`.
+- [ ] Document which UI surfaces are allowed to use `gpui-component`.
+
+## Phase 27: Permissions And AI Layer
 
 Goal: add advanced features safely after the editor core works.
 

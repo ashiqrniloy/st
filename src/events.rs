@@ -27,6 +27,14 @@ pub enum EditorCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneUpdate {
+    pub background_color: u32,
+    pub text: String,
+    pub cursor_char_index: usize,
+    pub cursor_visible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RenderCommand {
     DrawRect {
         x: f32,
