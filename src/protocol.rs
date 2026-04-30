@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     documentation::{DocumentationQuery, DocumentationResult},
-    events::{EditorCommand, KeyInputEvent, RenderCommand, SceneUpdate},
+    events::{EditorCommand, KeyInputEvent, RenderCommand, ScenePatch, SceneUpdate, Viewport},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -13,15 +13,33 @@ pub enum ClientToServer {
     Hello,
     KeyInput(KeyInputEvent),
     Command(EditorCommand),
-    CloseClient { client_id: ClientId },
+    CloseClient {
+        client_id: ClientId,
+    },
     ShutdownServer,
     DocumentationQuery(DocumentationQuery),
+    SetViewport {
+        viewport: Viewport,
+    },
+    RegisterJsCommand {
+        extension_id: String,
+        command_id: String,
+        title: String,
+        description: String,
+        category: String,
+    },
+    RegisterJsKeybinding {
+        extension_id: String,
+        chord: String,
+        command_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerToClient {
     Welcome { client_id: ClientId },
-    Scene(SceneUpdate),
+    SceneSnapshot(SceneUpdate),
+    ScenePatch(ScenePatch),
     Render(RenderCommand),
     Error { message: String },
     ServerShuttingDown { reason: String },
@@ -85,7 +103,7 @@ mod tests {
 
     #[test]
     fn scene_message_round_trips_through_json() {
-        let message = ServerToClient::Scene(SceneUpdate {
+        let message = ServerToClient::SceneSnapshot(SceneUpdate {
             background_color: 0x1e1e2e,
             text: "abc".into(),
             cursor_char_index: 2,
@@ -118,5 +136,46 @@ mod tests {
         let json = serde_json::to_string(&message).expect("serialize docs query");
         let decoded: ClientToServer = serde_json::from_str(&json).expect("deserialize docs query");
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn viewport_message_round_trips_through_json() {
+        let message = ClientToServer::SetViewport {
+            viewport: Viewport {
+                start_line: 3,
+                end_line: 9,
+            },
+        };
+        let json = serde_json::to_string(&message).expect("serialize viewport message");
+        let decoded: ClientToServer =
+            serde_json::from_str(&json).expect("deserialize viewport message");
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn js_registration_messages_round_trip_through_json() {
+        let command = ClientToServer::RegisterJsCommand {
+            extension_id: "ext.test".into(),
+            command_id: "ext.hello".into(),
+            title: "Hello".into(),
+            description: "Run hello".into(),
+            category: "extension".into(),
+        };
+        let chord = ClientToServer::RegisterJsKeybinding {
+            extension_id: "ext.test".into(),
+            chord: "ctrl+d".into(),
+            command_id: "ext.hello".into(),
+        };
+
+        let command_json = serde_json::to_string(&command).expect("serialize command registration");
+        let chord_json = serde_json::to_string(&chord).expect("serialize keybinding registration");
+
+        let command_decoded: ClientToServer =
+            serde_json::from_str(&command_json).expect("deserialize command registration");
+        let chord_decoded: ClientToServer =
+            serde_json::from_str(&chord_json).expect("deserialize keybinding registration");
+
+        assert_eq!(command_decoded, command);
+        assert_eq!(chord_decoded, chord);
     }
 }

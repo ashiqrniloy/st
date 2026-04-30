@@ -8,12 +8,29 @@ use std::{
 use tokio::{io::BufReader, net::UnixStream, sync::mpsc as tokio_mpsc, time::sleep};
 
 use crate::{
-    configuration::DEFAULT_AUTO_STARTED_IDLE_TIMEOUT_SECS,
-    events::{EditorEvent, SceneUpdate},
+    configuration::{DEFAULT_AUTO_STARTED_IDLE_TIMEOUT_SECS, DEFAULT_EDITOR_BACKGROUND_COLOR},
+    events::{EditorEvent, ScenePatch, SceneUpdate, Viewport},
     ipc::{connect_to_server, read_json_line, socket_path, write_json_line},
     protocol::{ClientId, ClientToServer, ServerToClient},
     render::{UiChannels, run_ui_with_gpui},
 };
+
+fn scene_update_from_patch(patch: ScenePatch) -> Option<SceneUpdate> {
+    match patch {
+        ScenePatch::VisibleTextUpdate {
+            text,
+            cursor_char_index,
+            cursor_visible,
+            ..
+        } => Some(SceneUpdate {
+            background_color: DEFAULT_EDITOR_BACKGROUND_COLOR,
+            text,
+            cursor_char_index,
+            cursor_visible,
+        }),
+        _ => None,
+    }
+}
 
 pub fn run() -> Result<(), String> {
     let (ui_tx, ui_rx) = tokio_mpsc::unbounded_channel::<EditorEvent>();
@@ -93,6 +110,14 @@ fn spawn_ipc_thread(
                 return;
             }
 
+            let _ = write_json_line(
+                &mut writer,
+                &ClientToServer::SetViewport {
+                    viewport: Viewport::default(),
+                },
+            )
+            .await;
+
             loop {
                 tokio::select! {
                     ui_event = ui_rx.recv() => {
@@ -114,6 +139,9 @@ fn spawn_ipc_thread(
                                     break;
                                 }
                             }
+                            EditorEvent::ExecuteJsCommand { .. } => {
+                                // UI thread never emits this; server->JS runtime path only.
+                            }
                             EditorEvent::Shutdown => {
                                 let _ = write_json_line(
                                     &mut writer,
@@ -128,8 +156,13 @@ fn spawn_ipc_thread(
                             Ok(Some(ServerToClient::Welcome { client_id })) => {
                                 println!("Client: unexpected second welcome for {client_id:?}");
                             }
-                            Ok(Some(ServerToClient::Scene(scene))) => {
+                            Ok(Some(ServerToClient::SceneSnapshot(scene))) => {
                                 let _ = scene_tx.send(scene);
+                            }
+                            Ok(Some(ServerToClient::ScenePatch(patch))) => {
+                                if let Some(scene) = scene_update_from_patch(patch) {
+                                    let _ = scene_tx.send(scene);
+                                }
                             }
                             Ok(Some(ServerToClient::Render(command))) => {
                                 println!("Client: received debug render command: {command:?}");
@@ -204,4 +237,25 @@ fn start_server_process() -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|err| format!("failed to start server process: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_text_patch_preserves_server_cursor_in_scene_update() {
+        let scene = scene_update_from_patch(ScenePatch::VisibleTextUpdate {
+            start_line: 0,
+            end_line: 200,
+            text: "abc".into(),
+            cursor_char_index: 3,
+            cursor_visible: true,
+        })
+        .expect("visible text patch should become a scene update");
+
+        assert_eq!(scene.text, "abc");
+        assert_eq!(scene.cursor_char_index, 3);
+        assert!(scene.cursor_visible);
+    }
 }

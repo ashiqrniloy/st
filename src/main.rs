@@ -10,6 +10,7 @@ mod js_runtime;
 mod protocol;
 mod render;
 mod server;
+mod workers;
 
 use cli::CliCommand;
 

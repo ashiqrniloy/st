@@ -193,24 +193,24 @@ Test plan:
 
 Implementation tasks:
 
-- [ ] Document in code comments that Rust owns the editor hot path.
-- [ ] Ensure ordinary typing, cursor movement, selection, undo/redo, and scene generation do not require JavaScript.
-- [ ] Ensure JavaScript registers behavior while Rust dispatches and validates commands.
-- [ ] Add tracing or timing hooks around key-to-scene latency.
-- [ ] Add tracing or timing hooks around scene-to-client latency.
-- [ ] Add tracing or counters for IPC message sizes.
-- [ ] Add tracing or counters for central server event-loop queue depth.
-- [ ] Add tracing or counters for per-client outbound queue depth.
-- [ ] Add timing around Deno command execution.
-- [ ] Add timing around background worker task execution once workers exist.
-- [ ] Add a rule that server/editor state is never held across socket I/O awaits.
-- [ ] Add a rule that server/editor state is never held while executing JavaScript.
-- [ ] Add a rule that extensions request typed commands/transactions instead of mutating editor state directly.
-- [ ] Link this phase to `performance.md` as the detailed rationale.
+- [x] Document in code comments that Rust owns the editor hot path.
+- [x] Ensure ordinary typing, cursor movement, selection, undo/redo, and scene generation do not require JavaScript.
+- [x] Ensure JavaScript registers behavior while Rust dispatches and validates commands.
+- [x] Add tracing or timing hooks around key-to-scene latency.
+- [x] Add tracing or timing hooks around scene-to-client latency.
+- [x] Add tracing or counters for IPC message sizes.
+- [x] Add tracing or counters for central server event-loop queue depth.
+- [x] Add tracing or counters for per-client outbound queue depth.
+- [x] Add timing around Deno command execution.
+- [x] Add timing around background worker task execution once workers exist.
+- [x] Add a rule that server/editor state is never held across socket I/O awaits.
+- [x] Add a rule that server/editor state is never held while executing JavaScript.
+- [x] Add a rule that extensions request typed commands/transactions instead of mutating editor state directly.
+- [x] Link this phase to `performance.md` as the detailed rationale.
 
-- [ ] Write or update tests from the test plan after implementation.
-- [ ] Validate that the tests prove each acceptance criterion is met.
-- [ ] Run formatting and the relevant/full test suite.
+- [x] Write or update tests from the test plan after implementation.
+- [x] Validate that the tests prove each acceptance criterion is met.
+- [x] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -237,24 +237,24 @@ Test plan:
 
 Implementation tasks:
 
-- [ ] Evaluate `ropey`, piece-table storage, or another scalable text storage structure.
-- [ ] Choose the initial scalable buffer representation.
-- [ ] Introduce `BufferId` if not already available.
-- [ ] Introduce `BufferVersion`.
-- [ ] Replace direct `String` mutation in `EditorState` with the chosen text storage abstraction.
-- [ ] Preserve efficient insert/delete operations.
-- [ ] Add line/column mapping.
-- [ ] Add UTF-8 offset mapping.
-- [ ] Add UTF-16 offset mapping for future LSP support.
-- [ ] Add range APIs for reading slices of the buffer.
-- [ ] Add explicit full-buffer read APIs only where needed.
-- [ ] Add cheap immutable snapshot support for background workers.
-- [ ] Include `BufferVersion` in snapshots.
-- [ ] Ensure background results can be discarded when their `BufferVersion` is stale.
+- [x] Evaluate `ropey`, piece-table storage, or another scalable text storage structure.
+- [x] Choose the initial scalable buffer representation.
+- [x] Introduce `BufferId` if not already available.
+- [x] Introduce `BufferVersion`.
+- [x] Replace direct `String` mutation in `EditorState` with the chosen text storage abstraction.
+- [x] Preserve efficient insert/delete operations.
+- [x] Add line/column mapping.
+- [x] Add UTF-8 offset mapping.
+- [x] Add UTF-16 offset mapping for future LSP support.
+- [x] Add range APIs for reading slices of the buffer.
+- [x] Add explicit full-buffer read APIs only where needed.
+- [x] Add cheap immutable snapshot support for background workers.
+- [x] Include `BufferVersion` in snapshots.
+- [x] Ensure background results can be discarded when their `BufferVersion` is stale.
 
-- [ ] Write or update tests from the test plan after implementation.
-- [ ] Validate that the tests prove each acceptance criterion is met.
-- [ ] Run formatting and the relevant/full test suite.
+- [x] Write or update tests from the test plan after implementation.
+- [x] Validate that the tests prove each acceptance criterion is met.
+- [x] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -281,23 +281,23 @@ Test plan:
 
 Implementation tasks:
 
-- [ ] Define client viewport reporting from GPUI client to server.
-- [ ] Track each client's viewport independently on the server.
-- [ ] Split scene updates into snapshot and patch concepts.
-- [ ] Add cursor-only update messages.
-- [ ] Add selection-only update messages.
-- [ ] Add visible-line text update messages.
-- [ ] Add decoration/style-span update messages.
-- [ ] Add diagnostics update messages for future LSP support.
-- [ ] Avoid sending full buffer text after every edit.
-- [ ] Send only visible or required ranges to each client where practical.
-- [ ] Keep an initial full scene snapshot path for first render/resync.
-- [ ] Add resync handling if a client misses or rejects a patch.
-- [ ] Track IPC payload sizes before and after the protocol change.
+- [x] Define client viewport reporting from GPUI client to server.
+- [x] Track each client's viewport independently on the server.
+- [x] Split scene updates into snapshot and patch concepts.
+- [x] Add cursor-only update messages.
+- [x] Add selection-only update messages.
+- [x] Add visible-line text update messages.
+- [x] Add decoration/style-span update messages.
+- [x] Add diagnostics update messages for future LSP support.
+- [x] Avoid sending full buffer text after every edit.
+- [x] Send only visible or required ranges to each client where practical.
+- [x] Keep an initial full scene snapshot path for first render/resync.
+- [x] Add resync handling if a client misses or rejects a patch.
+- [x] Track IPC payload sizes before and after the protocol change.
 
-- [ ] Write or update tests from the test plan after implementation.
-- [ ] Validate that the tests prove each acceptance criterion is met.
-- [ ] Run formatting and the relevant/full test suite.
+- [x] Write or update tests from the test plan after implementation.
+- [x] Validate that the tests prove each acceptance criterion is met.
+- [x] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -324,23 +324,23 @@ Test plan:
 
 Implementation tasks:
 
-- [ ] Define a background task request/response model.
-- [ ] Define worker request IDs for correlating responses.
-- [ ] Define cancellable task handles.
-- [ ] Add a CPU worker pool for CPU-heavy tasks.
-- [ ] Use Tokio tasks for I/O-heavy background work.
-- [ ] Use dedicated OS threads where a subsystem has ownership or thread-affinity requirements.
-- [ ] Ensure the central server event loop schedules work but does not execute expensive work inline.
-- [ ] Ensure workers receive immutable snapshots or typed requests, not mutable editor state.
-- [ ] Ensure worker responses include relevant session/buffer/version metadata.
-- [ ] Discard stale worker responses based on `BufferVersion` or request cancellation.
-- [ ] Add cancellation support for parse/search/completion-style tasks.
-- [ ] Add timeout support for worker requests where appropriate.
-- [ ] Add metrics for worker queue depth and task duration.
+- [x] Define a background task request/response model.
+- [x] Define worker request IDs for correlating responses.
+- [x] Define cancellable task handles.
+- [x] Add a CPU worker pool for CPU-heavy tasks.
+- [x] Use Tokio tasks for I/O-heavy background work.
+- [x] Use dedicated OS threads where a subsystem has ownership or thread-affinity requirements.
+- [x] Ensure the central server event loop schedules work but does not execute expensive work inline.
+- [x] Ensure workers receive immutable snapshots or typed requests, not mutable editor state.
+- [x] Ensure worker responses include relevant session/buffer/version metadata.
+- [x] Discard stale worker responses based on `BufferVersion` or request cancellation.
+- [x] Add cancellation support for parse/search/completion-style tasks.
+- [x] Add timeout support for worker requests where appropriate.
+- [x] Add metrics for worker queue depth and task duration.
 
-- [ ] Write or update tests from the test plan after implementation.
-- [ ] Validate that the tests prove each acceptance criterion is met.
-- [ ] Run formatting and the relevant/full test suite.
+- [x] Write or update tests from the test plan after implementation.
+- [x] Validate that the tests prove each acceptance criterion is met.
+- [x] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -366,15 +366,15 @@ Test plan:
 
 Implementation tasks:
 
-- [ ] Create `runtime/bootstrap.js`.
-- [ ] Create `runtime/editor_api.js`.
-- [ ] Load bootstrap from disk in server runtime.
-- [ ] Report JS syntax/runtime errors clearly.
-- [ ] Keep server alive if JS fails to load.
+- [x] Create `runtime/bootstrap.js`.
+- [x] Create `runtime/editor_api.js`.
+- [x] Load bootstrap from disk in server runtime.
+- [x] Report JS syntax/runtime errors clearly.
+- [x] Keep server alive if JS fails to load.
 
-- [ ] Write or update tests from the test plan after implementation.
-- [ ] Validate that the tests prove each acceptance criterion is met.
-- [ ] Run formatting and the relevant/full test suite.
+- [x] Write or update tests from the test plan after implementation.
+- [x] Validate that the tests prove each acceptance criterion is met.
+- [x] Run formatting and the relevant/full test suite.
 
 ## Phase 14: JS Commands And Keybindings
 
@@ -449,24 +449,24 @@ pub struct Keymap {
 
 Implementation tasks:
 
-- [ ] Define `KeyChord` normalized from `KeyInputEvent`.
-- [ ] Implement modified-key chord handling (Ctrl/Alt/Meta and multi-key chords) through Rust keymap dispatch.
-- [ ] Define command registry structure in Rust server.
-- [ ] Define keymap structure in Rust server.
-- [ ] Define `CommandHandler::RustBuiltin`.
-- [ ] Define `CommandHandler::JsCommand`.
-- [ ] Expose command registration API to JS.
-- [ ] Expose keybinding registration API to JS.
-- [ ] Track command ownership by extension/runtime.
-- [ ] Store JS-registered keybindings in Rust-owned keymap.
-- [ ] Resolve incoming key input through Rust keymap before text insertion.
-- [ ] Invoke Deno only for keybindings/commands registered by JS.
-- [ ] Allow JS command to request a typed `EditorCommand`.
-- [ ] Validate and apply requested `EditorCommand` in Rust server.
+- [x] Define `KeyChord` normalized from `KeyInputEvent`.
+- [x] Implement modified-key chord handling (Ctrl/Alt/Meta and multi-key chords) through Rust keymap dispatch.
+- [x] Define command registry structure in Rust server.
+- [x] Define keymap structure in Rust server.
+- [x] Define `CommandHandler::RustBuiltin`.
+- [x] Define `CommandHandler::JsCommand`.
+- [x] Expose command registration API to JS.
+- [x] Expose keybinding registration API to JS.
+- [x] Track command ownership by extension/runtime.
+- [x] Store JS-registered keybindings in Rust-owned keymap.
+- [x] Resolve incoming key input through Rust keymap before text insertion.
+- [x] Invoke Deno only for keybindings/commands registered by JS.
+- [x] Allow JS command to request a typed `EditorCommand`.
+- [x] Validate and apply requested `EditorCommand` in Rust server.
 
-- [ ] Write or update tests from the test plan after implementation.
-- [ ] Validate that the tests prove each acceptance criterion is met.
-- [ ] Run formatting and the relevant/full test suite.
+- [x] Write or update tests from the test plan after implementation.
+- [x] Validate that the tests prove each acceptance criterion is met.
+- [x] Run formatting and the relevant/full test suite.
 
 ## Phase 15: Code Review
 

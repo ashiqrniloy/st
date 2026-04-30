@@ -441,17 +441,19 @@ impl EntityInputHandler for RootView {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.content = format!(
-            "{}{}{}",
-            &self.content[..range.start],
-            new_text,
-            &self.content[range.end..]
-        );
-        let new_cursor = range.start + new_text.len();
-        self.selected_range = new_cursor..new_cursor;
-        self.marked_range = None;
+        if self.marked_range.is_some() {
+            self.content = format!(
+                "{}{}{}",
+                &self.content[..range.start],
+                new_text,
+                &self.content[range.end..]
+            );
+            let new_cursor = range.start + new_text.len();
+            self.selected_range = new_cursor..new_cursor;
+            self.marked_range = None;
+            cx.notify();
+        }
         self.send_key(new_text, Some(new_text.to_string()), false);
-        cx.notify();
     }
 
     fn replace_and_mark_text_in_range(

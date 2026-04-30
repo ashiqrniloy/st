@@ -61,10 +61,13 @@ pub enum RustBuiltinCommand {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandHandler {
     RustBuiltin(RustBuiltinCommand),
-    Extension,
+    JsCommand {
+        extension_id: String,
+        command_id: String,
+    },
     Tool,
     Generated,
 }
@@ -150,7 +153,7 @@ impl CommandRegistry {
 
         match command.handler {
             CommandHandler::RustBuiltin(kind) => apply_builtin_command(kind, invocation, editor),
-            CommandHandler::Extension | CommandHandler::Tool | CommandHandler::Generated => {
+            CommandHandler::JsCommand { .. } | CommandHandler::Tool | CommandHandler::Generated => {
                 Err(format!(
                     "command handler not implemented yet for {}",
                     command.descriptor.id.as_str()
@@ -173,6 +176,12 @@ impl CommandRegistry {
 
         commands.sort_by(|a, b| a.id.cmp(&b.id));
         commands
+    }
+
+    pub fn handler_for(&self, command_id: &CommandId) -> Option<&CommandHandler> {
+        self.commands
+            .get(command_id)
+            .map(|registered| &registered.handler)
     }
 
     pub fn describe_command(&self, command_id: &str) -> Option<DocumentationEntry> {
@@ -448,7 +457,7 @@ mod tests {
             )
             .expect("dispatch should succeed");
 
-        assert_eq!(editor.buffer, "abc");
+        assert_eq!(editor.buffer.full_text(), "abc");
         assert_eq!(editor.cursor, 3);
     }
 
