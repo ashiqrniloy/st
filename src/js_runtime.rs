@@ -101,57 +101,45 @@ fn user_init_ts_path() -> PathBuf {
 
 fn execute_runtime_scripts_from_paths(
     js_runtime: &mut deno_core::JsRuntime,
-    api_path: &Path,
+    runtime_paths: &[PathBuf],
     bootstrap_path: &Path,
 ) -> Result<(), String> {
-    execute_runtime_scripts_from_paths_with_config(js_runtime, api_path, bootstrap_path, false)
+    execute_runtime_scripts_from_paths_with_config(js_runtime, runtime_paths, bootstrap_path, false)
 }
 
 fn execute_runtime_scripts_from_paths_with_config(
     js_runtime: &mut deno_core::JsRuntime,
-    api_path: &Path,
+    runtime_paths: &[PathBuf],
     bootstrap_path: &Path,
     load_user_config: bool,
 ) -> Result<(), String> {
-    let api_code = load_runtime_script(api_path)
-        .map_err(|err| format!("failed to load runtime file {}: {err}", api_path.display()))?;
-    let bootstrap_code = load_runtime_script(bootstrap_path).map_err(|err| {
-        format!(
-            "failed to load runtime file {}: {err}",
-            bootstrap_path.display()
-        )
-    })?;
-
-    js_runtime
-        .execute_script(api_path.to_string_lossy().to_string(), api_code)
-        .map_err(|err| {
-            format!(
-                "runtime syntax/runtime error in {}: {err}",
-                api_path.display()
-            )
-        })?;
+    for runtime_path in runtime_paths {
+        execute_script_file(js_runtime, runtime_path)?;
+    }
 
     let user_init = user_init_ts_path();
     if load_user_config && user_init.exists() {
         execute_script_file(js_runtime, &user_init)?;
     }
 
-    js_runtime
-        .execute_script(bootstrap_path.to_string_lossy().to_string(), bootstrap_code)
-        .map_err(|err| {
-            format!(
-                "runtime syntax/runtime error in {}: {err}",
-                bootstrap_path.display()
-            )
-        })?;
+    execute_script_file(js_runtime, bootstrap_path)?;
 
     Ok(())
 }
 
+fn runtime_api_paths() -> Vec<PathBuf> {
+    vec![
+        runtime_file("keybindings.js"),
+        runtime_file("commands.js"),
+        runtime_file("config.js"),
+        runtime_file("editor_api.js"),
+    ]
+}
+
 fn execute_runtime_scripts_from_disk(js_runtime: &mut deno_core::JsRuntime) -> Result<(), String> {
-    let api_path = runtime_file("editor_api.js");
+    let runtime_paths = runtime_api_paths();
     let bootstrap_path = runtime_file("bootstrap.js");
-    execute_runtime_scripts_from_paths_with_config(js_runtime, &api_path, &bootstrap_path, true)
+    execute_runtime_scripts_from_paths_with_config(js_runtime, &runtime_paths, &bootstrap_path, true)
 }
 
 pub fn spawn_js_runtime(
@@ -232,7 +220,7 @@ mod tests {
         fs::write(&bootstrap, "globalThis.testBoot = 1;").expect("write bootstrap");
 
         let mut runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions::default());
-        execute_runtime_scripts_from_paths(&mut runtime, &api, &bootstrap)
+        execute_runtime_scripts_from_paths(&mut runtime, &[api.clone()], &bootstrap)
             .expect("runtime scripts should load");
 
         let _ = fs::remove_file(api);
@@ -247,7 +235,7 @@ mod tests {
         fs::write(&bootstrap, "globalThis.ok = true;").expect("write bootstrap");
 
         let mut runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions::default());
-        let err = execute_runtime_scripts_from_paths(&mut runtime, &api, &bootstrap)
+        let err = execute_runtime_scripts_from_paths(&mut runtime, &[api.clone()], &bootstrap)
             .expect_err("syntax error expected");
         assert!(err.contains("runtime syntax/runtime error"));
         assert!(err.contains("runtime-api-bad.js"));
@@ -259,11 +247,8 @@ mod tests {
     #[test]
     fn checked_in_runtime_scripts_load_together() {
         let mut runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions::default());
-        execute_runtime_scripts_from_paths(
-            &mut runtime,
-            &runtime_file("editor_api.js"),
-            &runtime_file("bootstrap.js"),
-        )
-        .expect("checked-in runtime scripts should load without syntax/runtime errors");
+        let runtime_paths = runtime_api_paths();
+        execute_runtime_scripts_from_paths(&mut runtime, &runtime_paths, &runtime_file("bootstrap.js"))
+            .expect("checked-in runtime scripts should load without syntax/runtime errors");
     }
 }

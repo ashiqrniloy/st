@@ -1,22 +1,24 @@
+const { core } = Deno;
+
 async function mainLoop() {
   while (true) {
-    const event = await globalThis.__stRuntime.recvEditorEvent();
+    const event = await core.ops.op_recv_editor_event();
     if (event === null) {
-      Deno.core.print("JS loop: editor event channel closed, stopping runtime loop.\n");
+      core.print("JS loop: editor event channel closed, stopping runtime loop.\n");
       break;
     }
 
     const started = Date.now();
-    Deno.core.print(`JS received: ${JSON.stringify(event)}\n`);
+    core.print(`JS received: ${JSON.stringify(event)}\n`);
 
-    globalThis.__stRuntime.sendRenderCommand({
+    core.ops.op_send_render_command({
       DrawRect: { x: 0.0, y: 0.0, w: 100.0, h: 100.0, color: 0xff00ff },
     });
 
-    Deno.core.print(`JS command duration ms: ${Date.now() - started}\n`);
+    core.print(`JS command duration ms: ${Date.now() - started}\n`);
   }
 }
 
 mainLoop().catch((err) => {
-  Deno.core.print(`JS mainLoop error: ${err?.stack ?? err}\n`);
+  core.print(`JS mainLoop error: ${err?.stack ?? err}\n`);
 });
