@@ -247,7 +247,7 @@ async fn resolve_task_result(
         }
     } else {
         match fut.await {
-            Ok(result) => result.into(),
+            Ok(result) => result,
             Err(err) => BackgroundTaskResult::Failed(err.to_string()),
         }
     }

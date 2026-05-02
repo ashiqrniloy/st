@@ -44,6 +44,16 @@ pub struct SettingDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingDescriptor {
+    pub chord: String,
+    pub command_id: String,
+    pub title: String,
+    pub description: String,
+    pub source: CommandSource,
+    pub owner: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DocumentationQuery {
     ListCommands,
     DescribeCommand { command_id: String },
@@ -59,12 +69,30 @@ pub enum DocumentationQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DocumentationResult {
-    CommandList { commands: Vec<DocumentationSummary> },
-    CommandDetails { command: DocumentationEntry },
-    SettingsList { settings: Vec<SettingDescriptor> },
-    SettingDetails { setting: SettingDescriptor },
-    EmptyPlaceholder { registry: DocumentationRegistryKind },
-    QueryError { message: String },
+    CommandList {
+        commands: Vec<DocumentationSummary>,
+    },
+    CommandDetails {
+        command: DocumentationEntry,
+    },
+    SettingsList {
+        settings: Vec<SettingDescriptor>,
+    },
+    SettingDetails {
+        setting: SettingDescriptor,
+    },
+    KeybindingsList {
+        keybindings: Vec<KeybindingDescriptor>,
+    },
+    ApiList {
+        apis: Vec<DocumentationEntry>,
+    },
+    EmptyPlaceholder {
+        registry: DocumentationRegistryKind,
+    },
+    QueryError {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +114,10 @@ pub const REQUIRED_BUILTIN_CAPABILITY_IDS: &[&str] = &[
     "editor.backspace",
     "editor.move_cursor_left",
     "editor.move_cursor_right",
+    "window.split_horizontal",
+    "window.split_vertical",
+    "window.split_dwim",
+    "api.window_splitting",
     "render.scene_update",
     "cli.commands",
 ];
@@ -133,9 +165,29 @@ pub fn builtin_capability_docs() -> Vec<DocumentationEntry> {
             "Move cursor one char right.",
         ),
         capability(
+            "window.split_horizontal",
+            "Split Window Horizontally",
+            "Split active window pane into top/bottom regions with Rust-owned validation.",
+        ),
+        capability(
+            "window.split_vertical",
+            "Split Window Vertically",
+            "Split active window pane into left/right regions with Rust-owned validation.",
+        ),
+        capability(
+            "window.split_dwim",
+            "Split Window DWIM",
+            "Choose a documented split direction from window dimensions and layout state.",
+        ),
+        capability(
+            "api.window_splitting",
+            "Window Splitting JavaScript API",
+            "Extensions call splitWindowHorizontal, splitWindowVertical, or splitWindowDwim to request typed Rust split commands.",
+        ),
+        capability(
             "render.scene_update",
             "Scene Update",
-            "Push updated buffer/cursor scene state to clients.",
+            "Push updated buffer/cursor/pane scene state to clients.",
         ),
         capability(
             "cli.commands",
@@ -147,6 +199,34 @@ pub fn builtin_capability_docs() -> Vec<DocumentationEntry> {
 
 pub fn builtin_settings() -> Vec<SettingDescriptor> {
     crate::configuration::builtin_setting_descriptors()
+}
+
+pub fn builtin_api_docs() -> Vec<DocumentationEntry> {
+    vec![
+        DocumentationEntry {
+            id: "config.loading".into(),
+            title: "Configuration Loading".into(),
+            summary: "JavaScript configuration is loaded from ~/.config/st/init.js.".into(),
+            description: "At server startup the Deno runtime loads the built-in config API, then ~/.config/st/init.js when it exists, then the runtime event loop. Config code should register keybindings and future settings through public globals such as keymap.bind. User-facing APIs do not use an st. prefix. JavaScript is the supported config language; TypeScript syntax is not accepted unless it is also valid JavaScript.".into(),
+            arguments: vec![],
+            examples: vec!["keymap.bind(\"ctrl+shift s\", \"window.split_dwim\");".into()],
+            related_links: vec!["docs/configuration.md".into(), "runtime/default_init.js".into()],
+            source: CommandSource::Builtin,
+        },
+        DocumentationEntry {
+            id: "api.keymap.bind".into(),
+            title: "keymap.bind".into(),
+            summary: "Bind a key chord to a command from JavaScript config.".into(),
+            description: "Register a keybinding in Rust's keymap. The command id must already exist in the Rust command registry. Chords use an Emacs-style modifier group followed by one or more keys, such as ctrl+shift h or ctrl+shift w h. Supported modifiers are ctrl, shift, meta, and alt. Supported named keys include space, enter, and escape. The binding is introspectable through keybinding documentation queries.".into(),
+            arguments: vec![
+                DocumentationArgument { name: "chord".into(), description: "Key chord such as ctrl+shift h, ctrl+shift w h, or ctrl x ctrl s.".into() },
+                DocumentationArgument { name: "commandId".into(), description: "Registered command id, for example window.split_horizontal.".into() },
+            ],
+            examples: vec!["keymap.bind(\"ctrl+shift h\", \"window.split_horizontal\");".into()],
+            related_links: vec!["docs/configuration.md#keybindings".into()],
+            source: CommandSource::Builtin,
+        },
+    ]
 }
 
 pub fn validate_builtin_docs() -> Result<(), String> {
@@ -209,5 +289,14 @@ mod tests {
     #[test]
     fn builtin_docs_validator_passes() {
         validate_builtin_docs().expect("builtin docs should validate");
+    }
+
+    #[test]
+    fn builtin_api_docs_include_configuration_wiki_entries() {
+        let apis = builtin_api_docs();
+        assert!(apis.iter().any(|api| api.id == "config.loading"));
+        assert!(apis.iter().any(|api| api.id == "api.keymap.bind"));
+        assert!(apis.iter().all(|api| !api.description.trim().is_empty()));
+        assert!(apis.iter().all(|api| !api.examples.is_empty()));
     }
 }

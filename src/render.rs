@@ -3,9 +3,10 @@ use std::ops::Range;
 use gpui::{
     App, Application, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId,
-    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, ShapedLine, Style, UTF16Selection, Window, WindowBounds, WindowOptions, actions,
-    div, fill, point, prelude::*, px, relative, rgb, size,
+    KeyBinding, KeyDownEvent, Keystroke, LayoutId, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, Style, UTF16Selection,
+    Window, WindowBounds, WindowOptions, actions, div, fill, point, prelude::*, px, relative, rgb,
+    size,
 };
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -15,7 +16,7 @@ use crate::{
         DEFAULT_EDITOR_BACKGROUND_COLOR, DEFAULT_EDITOR_TEXT_COLOR, DEFAULT_LINE_HEIGHT_PX,
         DEFAULT_SELECTION_COLOR,
     },
-    events::{EditorEvent, KeyInputEvent, SceneUpdate},
+    events::{EditorEvent, KeyInputEvent, PaneScene, SceneUpdate},
 };
 
 pub struct UiChannels {
@@ -91,6 +92,8 @@ struct RootView {
     line_height: Pixels,
     background_color: u32,
     cursor_visible: bool,
+    panes: Vec<PaneScene>,
+    last_reported_dimensions: Option<(u32, u32)>,
 }
 
 impl RootView {
@@ -112,6 +115,8 @@ impl RootView {
             line_height: px(DEFAULT_LINE_HEIGHT_PX),
             background_color: scene.background_color,
             cursor_visible: scene.cursor_visible,
+            panes: scene.panes,
+            last_reported_dimensions: None,
         };
         let cursor = s.char_to_byte_index(scene.cursor_char_index);
         s.selected_range = cursor..cursor;
@@ -121,6 +126,7 @@ impl RootView {
     fn apply_scene_update(&mut self, scene: SceneUpdate, cx: &mut Context<Self>) {
         self.background_color = scene.background_color;
         self.cursor_visible = scene.cursor_visible;
+        self.panes = scene.panes;
         if self.marked_range.is_none() && !self.is_selecting {
             self.content = scene.text;
             let cursor = self.char_to_byte_index(scene.cursor_char_index);
@@ -141,6 +147,28 @@ impl RootView {
             meta: false,
             repeat: false,
         }));
+    }
+
+    fn send_gpui_key_down(&self, event: &KeyDownEvent) {
+        if !should_send_raw_key_down(event) {
+            return;
+        }
+        let _ = self
+            .ui_tx
+            .send(EditorEvent::KeyInput(key_down_event_to_input(event)));
+    }
+
+    fn report_window_dimensions_if_changed(&mut self, bounds: Bounds<Pixels>) {
+        let width = f32::from(bounds.size.width).max(1.0).round() as u32;
+        let height = f32::from(bounds.size.height).max(1.0).round() as u32;
+        let dimensions = (width, height);
+        if self.last_reported_dimensions == Some(dimensions) {
+            return;
+        }
+        self.last_reported_dimensions = Some(dimensions);
+        let _ = self
+            .ui_tx
+            .send(EditorEvent::WindowDimensionsChanged { width, height });
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
@@ -370,6 +398,10 @@ impl RootView {
         }
     }
 
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.send_gpui_key_down(event);
+    }
+
     fn copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -532,6 +564,106 @@ struct TextSurface {
     view: Entity<RootView>,
 }
 
+fn key_name_from_keystroke(keystroke: &Keystroke) -> String {
+    match keystroke.key.to_ascii_lowercase().as_str() {
+        " " | "spacebar" => "space".into(),
+        "return" => "enter".into(),
+        "esc" => "escape".into(),
+        other => other.into(),
+    }
+}
+
+fn should_send_raw_key_down(event: &KeyDownEvent) -> bool {
+    let modifiers = event.keystroke.modifiers;
+    !event.is_held && (modifiers.control || modifiers.alt || modifiers.platform)
+}
+
+fn key_down_event_to_input(event: &KeyDownEvent) -> KeyInputEvent {
+    let Modifiers {
+        control,
+        alt,
+        shift,
+        platform,
+        ..
+    } = event.keystroke.modifiers;
+    KeyInputEvent {
+        logical_key: key_name_from_keystroke(&event.keystroke),
+        physical_key: String::new(),
+        text: None,
+        ctrl: control,
+        alt,
+        shift,
+        meta: platform,
+        repeat: event.is_held,
+    }
+}
+
+fn pane_divider_bounds(element_bounds: Bounds<Pixels>, panes: &[PaneScene]) -> Vec<Bounds<Pixels>> {
+    let mut dividers = Vec::new();
+    let mut seen = Vec::<(u32, u32, u32, u32)>::new();
+
+    for (index, a) in panes.iter().enumerate() {
+        for b in panes.iter().skip(index + 1) {
+            if a.x + a.width == b.x || b.x + b.width == a.x {
+                let x = if a.x + a.width == b.x { b.x } else { a.x };
+                let y_start = a.y.max(b.y);
+                let y_end = (a.y + a.height).min(b.y + b.height);
+                if y_start < y_end {
+                    let key = (x, y_start, x, y_end);
+                    if !seen.contains(&key) {
+                        seen.push(key);
+                        dividers.push(Bounds::new(
+                            point(
+                                element_bounds.left() + px(x as f32),
+                                element_bounds.top() + px(y_start as f32),
+                            ),
+                            size(px(1.0), px((y_end - y_start) as f32)),
+                        ));
+                    }
+                }
+            }
+
+            if a.y + a.height == b.y || b.y + b.height == a.y {
+                let y = if a.y + a.height == b.y { b.y } else { a.y };
+                let x_start = a.x.max(b.x);
+                let x_end = (a.x + a.width).min(b.x + b.width);
+                if x_start < x_end {
+                    let key = (x_start, y, x_end, y);
+                    if !seen.contains(&key) {
+                        seen.push(key);
+                        dividers.push(Bounds::new(
+                            point(
+                                element_bounds.left() + px(x_start as f32),
+                                element_bounds.top() + px(y as f32),
+                            ),
+                            size(px((x_end - x_start) as f32), px(1.0)),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    dividers
+}
+
+fn active_text_bounds(element_bounds: Bounds<Pixels>, panes: &[PaneScene]) -> Bounds<Pixels> {
+    panes
+        .iter()
+        .find(|pane| pane.active)
+        .or_else(|| panes.first())
+        .map(|pane| {
+            Bounds::new(
+                point(
+                    element_bounds.left() + px(pane.x as f32),
+                    element_bounds.top() + px(pane.y as f32),
+                ),
+                size(px(pane.width as f32), px(pane.height as f32)),
+            )
+        })
+        .unwrap_or(element_bounds)
+}
+
 struct PrepaintState {
     lines: Vec<ShapedLine>,
     cursor: Option<PaintQuad>,
@@ -580,6 +712,7 @@ impl Element for TextSurface {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let view = self.view.read(cx);
+        let text_bounds = active_text_bounds(bounds, &view.panes);
         let content = view.content.clone();
         let selected_range = view.selected_range.clone();
         let cursor = view.cursor_offset();
@@ -620,8 +753,8 @@ impl Element for TextSurface {
         let cursor_quad = Some(fill(
             Bounds::new(
                 point(
-                    bounds.left() + cursor_x,
-                    bounds.top() + view.line_height * cursor_line as f32,
+                    text_bounds.left() + cursor_x,
+                    text_bounds.top() + view.line_height * cursor_line as f32,
                 ),
                 size(px(2.0), view.line_height),
             ),
@@ -650,12 +783,12 @@ impl Element for TextSurface {
                     Some(fill(
                         Bounds::from_corners(
                             point(
-                                bounds.left() + start_x,
-                                bounds.top() + view.line_height * line_idx as f32,
+                                text_bounds.left() + start_x,
+                                text_bounds.top() + view.line_height * line_idx as f32,
                             ),
                             point(
-                                bounds.left() + end_x,
-                                bounds.top() + view.line_height * (line_idx as f32 + 1.0),
+                                text_bounds.left() + end_x,
+                                text_bounds.top() + view.line_height * (line_idx as f32 + 1.0),
                             ),
                         ),
                         rgb(DEFAULT_SELECTION_COLOR),
@@ -681,12 +814,24 @@ impl Element for TextSurface {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.view.update(cx, |view, _cx| {
+            view.report_window_dimensions_if_changed(bounds);
+        });
+
         let focus_handle = self.view.read(cx).focus_handle.clone();
+        let text_bounds = active_text_bounds(bounds, &self.view.read(cx).panes);
         window.handle_input(
             &focus_handle,
-            ElementInputHandler::new(bounds, self.view.clone()),
+            ElementInputHandler::new(text_bounds, self.view.clone()),
             cx,
         );
+
+        let panes = self.view.read(cx).panes.clone();
+        if panes.len() > 1 {
+            for divider in pane_divider_bounds(bounds, &panes) {
+                window.paint_quad(fill(divider, rgb(0x6c7086)));
+            }
+        }
 
         for selection in prepaint.selections.drain(..) {
             window.paint_quad(selection);
@@ -694,8 +839,8 @@ impl Element for TextSurface {
 
         for (i, line) in prepaint.lines.iter().enumerate() {
             let origin = point(
-                bounds.left(),
-                bounds.top() + self.view.read(cx).line_height * i as f32,
+                text_bounds.left(),
+                text_bounds.top() + self.view.read(cx).line_height * i as f32,
             );
             let _ = line.paint(origin, self.view.read(cx).line_height, window, cx);
         }
@@ -709,7 +854,7 @@ impl Element for TextSurface {
 
         self.view.update(cx, |view, _cx| {
             view.last_layout = std::mem::take(&mut prepaint.lines);
-            view.last_bounds = Some(bounds);
+            view.last_bounds = Some(text_bounds);
         });
     }
 }
@@ -741,6 +886,7 @@ impl Render for RootView {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -752,7 +898,87 @@ impl Render for RootView {
 
 #[cfg(test)]
 mod tests {
-    use super::{offset_from_utf16_str, offset_to_utf16_str};
+    use super::{
+        active_text_bounds, key_down_event_to_input, offset_from_utf16_str, offset_to_utf16_str,
+        pane_divider_bounds, should_send_raw_key_down,
+    };
+    use crate::{events::PaneScene, window_layout::PaneId};
+    use gpui::{Bounds, KeyDownEvent, Keystroke, Modifiers, point, px, size};
+
+    #[test]
+    fn active_text_bounds_uses_server_provided_active_pane_rectangle() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(300.0), px(200.0)));
+        let panes = vec![
+            PaneScene {
+                pane_id: PaneId(1),
+                x: 0,
+                y: 0,
+                width: 150,
+                height: 200,
+                active: false,
+            },
+            PaneScene {
+                pane_id: PaneId(2),
+                x: 150,
+                y: 0,
+                width: 150,
+                height: 200,
+                active: true,
+            },
+        ];
+
+        let active = active_text_bounds(bounds, &panes);
+        assert_eq!(active.left(), px(160.0));
+        assert_eq!(active.top(), px(20.0));
+        assert_eq!(active.size.width, px(150.0));
+        assert_eq!(active.size.height, px(200.0));
+    }
+
+    #[test]
+    fn pane_dividers_only_describe_internal_split_borders() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(300.0), px(200.0)));
+        assert!(
+            pane_divider_bounds(
+                bounds,
+                &[PaneScene {
+                    pane_id: PaneId(1),
+                    x: 0,
+                    y: 0,
+                    width: 300,
+                    height: 200,
+                    active: true,
+                }]
+            )
+            .is_empty()
+        );
+
+        let dividers = pane_divider_bounds(
+            bounds,
+            &[
+                PaneScene {
+                    pane_id: PaneId(1),
+                    x: 0,
+                    y: 0,
+                    width: 150,
+                    height: 200,
+                    active: true,
+                },
+                PaneScene {
+                    pane_id: PaneId(2),
+                    x: 150,
+                    y: 0,
+                    width: 150,
+                    height: 200,
+                    active: false,
+                },
+            ],
+        );
+        assert_eq!(dividers.len(), 1);
+        assert_eq!(dividers[0].left(), px(150.0));
+        assert_eq!(dividers[0].top(), px(0.0));
+        assert_eq!(dividers[0].size.width, px(1.0));
+        assert_eq!(dividers[0].size.height, px(200.0));
+    }
 
     #[test]
     fn utf16_utf8_offset_conversion_handles_multibyte_chars() {
@@ -763,6 +989,45 @@ mod tests {
         assert_eq!(offset_to_utf16_str(s, 0), 0);
         assert_eq!(offset_to_utf16_str(s, 1), 1);
         assert_eq!(offset_to_utf16_str(s, 5), 3);
+    }
+
+    #[test]
+    fn modified_gpui_key_down_becomes_server_key_input() {
+        let event = KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers: Modifiers {
+                    control: true,
+                    shift: true,
+                    ..Default::default()
+                },
+                key: "h".into(),
+                key_char: Some("H".into()),
+            },
+            is_held: false,
+        };
+
+        assert!(should_send_raw_key_down(&event));
+        let input = key_down_event_to_input(&event);
+        assert_eq!(input.logical_key, "h");
+        assert!(input.ctrl);
+        assert!(input.shift);
+        assert!(!input.alt);
+        assert!(!input.meta);
+        assert!(input.text.is_none());
+    }
+
+    #[test]
+    fn unmodified_text_key_down_stays_with_text_input_handler() {
+        let event = KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers: Modifiers::default(),
+                key: "h".into(),
+                key_char: Some("h".into()),
+            },
+            is_held: false,
+        };
+
+        assert!(!should_send_raw_key_down(&event));
     }
 }
 
@@ -816,6 +1081,14 @@ impl UiRenderer for GpuiRenderer {
                         text: String::new(),
                         cursor_char_index: 0,
                         cursor_visible: DEFAULT_CURSOR_VISIBLE,
+                        panes: vec![PaneScene {
+                            pane_id: crate::window_layout::PaneId(1),
+                            x: 0,
+                            y: 0,
+                            width: DEFAULT_CLIENT_WINDOW_WIDTH_PX as u32,
+                            height: DEFAULT_CLIENT_WINDOW_HEIGHT_PX as u32,
+                            active: true,
+                        }],
                     };
                     let entity = cx.new(|cx| RootView::from_scene(initial, ui_tx.clone(), cx));
                     window.focus(&entity.read(cx).focus_handle(cx));

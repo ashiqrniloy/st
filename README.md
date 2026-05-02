@@ -11,7 +11,7 @@ st server
   - Rust editor core
   - canonical editor state
   - buffers, cursors, selections, commands
-  - deno_core JavaScript/TypeScript runtime
+  - deno_core JavaScript runtime
   - extension/plugin lifecycle
   - file I/O and permissions later
   - local IPC listener
@@ -44,7 +44,7 @@ Rust owns correctness-critical state:
 - permission checks
 - render scene generation
 
-JavaScript/TypeScript customizes behavior through typed APIs:
+JavaScript customizes behavior through typed APIs:
 
 - commands
 - keybindings
@@ -161,4 +161,4 @@ The editor itself remains a custom GPUI-native, server-backed editor view so can
 
 ## Long-Term Direction
 
-The long-term design is similar in spirit to Emacs: programmable, introspectable, extensible, and customizable. The core difference is that Rust owns canonical editor correctness while JavaScript/TypeScript provides user programmability through controlled APIs.
+The long-term design is similar in spirit to Emacs: programmable, introspectable, extensible, and customizable. The core difference is that Rust owns canonical editor correctness while JavaScript provides user programmability through controlled APIs.

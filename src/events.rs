@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::window_layout::PaneId;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KeyInputEvent {
     pub logical_key: String,
@@ -19,6 +21,10 @@ pub enum EditorEvent {
         extension_id: String,
         command_id: String,
     },
+    WindowDimensionsChanged {
+        width: u32,
+        height: u32,
+    },
     Shutdown,
 }
 
@@ -28,6 +34,9 @@ pub enum EditorCommand {
     Backspace,
     MoveCursorLeft,
     MoveCursorRight,
+    SplitWindowHorizontal,
+    SplitWindowVertical,
+    SplitWindowDwim,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,11 +55,22 @@ impl Default for Viewport {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaneScene {
+    pub pane_id: PaneId,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneUpdate {
     pub background_color: u32,
     pub text: String,
     pub cursor_char_index: usize,
     pub cursor_visible: bool,
+    pub panes: Vec<PaneScene>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

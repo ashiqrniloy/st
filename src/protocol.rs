@@ -33,17 +33,32 @@ pub enum ClientToServer {
         chord: String,
         command_id: String,
     },
+    SetWindowDimensions {
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerToClient {
-    Welcome { client_id: ClientId },
+    Welcome {
+        client_id: ClientId,
+    },
     SceneSnapshot(SceneUpdate),
     ScenePatch(ScenePatch),
     Render(RenderCommand),
-    Error { message: String },
-    ServerShuttingDown { reason: String },
+    Error {
+        message: String,
+    },
+    ServerShuttingDown {
+        reason: String,
+    },
     DocumentationResult(DocumentationResult),
+    CommandResult {
+        command_id: String,
+        success: bool,
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -108,6 +123,7 @@ mod tests {
             text: "abc".into(),
             cursor_char_index: 2,
             cursor_visible: true,
+            panes: vec![],
         });
         let json = serde_json::to_string(&message).expect("serialize scene message");
         let decoded: ServerToClient =
@@ -149,6 +165,30 @@ mod tests {
         let json = serde_json::to_string(&message).expect("serialize viewport message");
         let decoded: ClientToServer =
             serde_json::from_str(&json).expect("deserialize viewport message");
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn command_result_round_trips_through_json() {
+        let message = ServerToClient::CommandResult {
+            command_id: "window.split_dwim".into(),
+            success: true,
+            message: "split accepted".into(),
+        };
+        let json = serde_json::to_string(&message).expect("serialize command result");
+        let decoded: ServerToClient =
+            serde_json::from_str(&json).expect("deserialize command result");
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn window_dimensions_message_round_trips_through_json() {
+        let message = ClientToServer::SetWindowDimensions {
+            width: 900,
+            height: 500,
+        };
+        let json = serde_json::to_string(&message).expect("serialize dimensions");
+        let decoded: ClientToServer = serde_json::from_str(&json).expect("deserialize dimensions");
         assert_eq!(decoded, message);
     }
 

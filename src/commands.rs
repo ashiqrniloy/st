@@ -58,6 +58,9 @@ pub enum RustBuiltinCommand {
     MoveCursorRight,
     HelpCommands,
     HelpCommand,
+    SplitWindowHorizontal,
+    SplitWindowVertical,
+    SplitWindowDwim,
 }
 
 #[allow(dead_code)]
@@ -184,6 +187,12 @@ impl CommandRegistry {
             .map(|registered| &registered.handler)
     }
 
+    pub fn command_title(&self, command_id: &CommandId) -> Option<&str> {
+        self.commands
+            .get(command_id)
+            .map(|registered| registered.descriptor.title.as_str())
+    }
+
     pub fn describe_command(&self, command_id: &str) -> Option<DocumentationEntry> {
         let id = CommandId::new(command_id).ok()?;
         self.commands.get(&id).map(|registered| DocumentationEntry {
@@ -220,6 +229,15 @@ pub fn editor_command_to_invocation(command: EditorCommand) -> Result<CommandInv
         EditorCommand::MoveCursorRight => Ok(CommandInvocation::new(CommandId::new(
             "editor.move_cursor_right",
         )?)),
+        EditorCommand::SplitWindowHorizontal => Ok(CommandInvocation::new(CommandId::new(
+            "window.split_horizontal",
+        )?)),
+        EditorCommand::SplitWindowVertical => Ok(CommandInvocation::new(CommandId::new(
+            "window.split_vertical",
+        )?)),
+        EditorCommand::SplitWindowDwim => {
+            Ok(CommandInvocation::new(CommandId::new("window.split_dwim")?))
+        }
     }
 }
 
@@ -251,6 +269,11 @@ fn apply_builtin_command(
         RustBuiltinCommand::HelpCommands | RustBuiltinCommand::HelpCommand => Err(
             "help commands are query-only in this phase; use documentation query messages".into(),
         ),
+        RustBuiltinCommand::SplitWindowHorizontal
+        | RustBuiltinCommand::SplitWindowVertical
+        | RustBuiltinCommand::SplitWindowDwim => {
+            Err("window split commands require server-owned client window state".into())
+        }
     }
 }
 
@@ -353,6 +376,48 @@ fn register_builtin_editor_commands(registry: &mut CommandRegistry) -> Result<()
             related_docs: vec!["documenation.md#command-metadata".into()],
         },
         CommandHandler::RustBuiltin(RustBuiltinCommand::MoveCursorRight),
+    )?;
+
+    registry.register(
+        CommandDescriptor {
+            id: CommandId::new("window.split_horizontal")?,
+            title: "Split Window Horizontally".into(),
+            description: "Split the active pane along the X axis to create top/bottom panes. Same-axis layouts stop at three panes; mixed layouts stop at four panes.".into(),
+            source: CommandSource::Builtin,
+            category: "window".into(),
+            arguments: vec![],
+            examples: vec!["Run window.split_horizontal to split the active pane into top and bottom regions".into()],
+            related_docs: vec!["planning/done/phase-16-ui-window-management-and-split-panes.md".into()],
+        },
+        CommandHandler::RustBuiltin(RustBuiltinCommand::SplitWindowHorizontal),
+    )?;
+
+    registry.register(
+        CommandDescriptor {
+            id: CommandId::new("window.split_vertical")?,
+            title: "Split Window Vertically".into(),
+            description: "Split the active pane along the Y axis to create left/right panes. The active unsplit pane is preferred; otherwise the next unsplit pane in stable pane order is used.".into(),
+            source: CommandSource::Builtin,
+            category: "window".into(),
+            arguments: vec![],
+            examples: vec!["Run window.split_vertical to split the active pane into left and right regions".into()],
+            related_docs: vec!["planning/done/phase-16-ui-window-management-and-split-panes.md".into()],
+        },
+        CommandHandler::RustBuiltin(RustBuiltinCommand::SplitWindowVertical),
+    )?;
+
+    registry.register(
+        CommandDescriptor {
+            id: CommandId::new("window.split_dwim")?,
+            title: "Split Window DWIM".into(),
+            description: "Choose a split direction from the current window aspect ratio and layout. Wide full windows start with horizontal top/bottom splits, constrained wide windows prefer vertical left/right splits, and terminal layouts return a clear error.".into(),
+            source: CommandSource::Builtin,
+            category: "window".into(),
+            arguments: vec![],
+            examples: vec!["Run window.split_dwim repeatedly to fill the current window up to the documented pane limit".into()],
+            related_docs: vec!["configuration setting window.split_dwim_wide_aspect_ratio".into()],
+        },
+        CommandHandler::RustBuiltin(RustBuiltinCommand::SplitWindowDwim),
     )?;
 
     registry.register(

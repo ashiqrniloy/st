@@ -97,13 +97,13 @@ Commands should not be registered as only an ID and handler.
 
 Bad:
 
-```ts
+```js
 commands.register("file.save", handler);
 ```
 
 Good:
 
-```ts
+```js
 commands.register({
   id: "file.save",
   title: "Save File",
@@ -140,7 +140,7 @@ registry.register(
 
 Settings and configuration options should be registered with type/default/range documentation and should explain how the user configures them.
 
-```ts
+```js
 settings.register({
   id: "editor.fontSize",
   title: "Font Size",
@@ -150,7 +150,7 @@ settings.register({
   minimum: 6,
   maximum: 72,
   configureWith: {
-    typescript: "editor.set({ fontSize: 14 })",
+    javascript: "editor.set({ fontSize: 14 })",
     yaml: "editor:\n  font_size: 14",
   },
   requiresRestart: false,
@@ -163,7 +163,7 @@ Every configurable behavior should document:
 type
 default
 valid range or enum values
-how to configure it from init.ts
+how to configure it from init.js
 YAML field if one exists
 example configuration
 whether reload/restart is required
@@ -173,7 +173,7 @@ whether reload/restart is required
 
 Modes should describe file patterns, behavior, contributed commands, and related services.
 
-```ts
+```js
 modes.register({
   id: "markdown",
   title: "Markdown Mode",
@@ -187,7 +187,7 @@ modes.register({
 
 AI tools and user-created tools must include metadata and permission information.
 
-```ts
+```js
 tools.register({
   id: "notes.summarizeSelection",
   title: "Summarize Selection",
@@ -327,12 +327,12 @@ configuration entrypoints when implemented
 
 ## Documentation For Extension API
 
-The TypeScript extension API should also be documented.
+The JavaScript extension API should also be documented.
 
 Long-term approach:
 
 ```text
-TypeScript declarations
+JavaScript declarations
   -> generated structured API docs
   -> loaded into help registry
   -> shown through help commands

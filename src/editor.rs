@@ -51,6 +51,10 @@ impl TextBuffer {
         self.rope.len_chars()
     }
 
+    pub fn line_count(&self) -> usize {
+        self.rope.len_lines().max(1)
+    }
+
     pub fn full_text(&self) -> String {
         self.rope.to_string()
     }
@@ -122,6 +126,9 @@ impl EditorState {
             EditorCommand::Backspace => self.backspace(),
             EditorCommand::MoveCursorLeft => self.move_cursor_left(),
             EditorCommand::MoveCursorRight => self.move_cursor_right(),
+            EditorCommand::SplitWindowHorizontal
+            | EditorCommand::SplitWindowVertical
+            | EditorCommand::SplitWindowDwim => {}
         }
     }
 

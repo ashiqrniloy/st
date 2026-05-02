@@ -13,13 +13,21 @@ use tokio::{io::BufReader, net::UnixStream, sync::mpsc};
 use crate::{
     cli::ServerOptions,
     commands::{CommandId, CommandInvocation, CommandRegistry, editor_command_to_invocation},
-    configuration::{DEFAULT_CURSOR_VISIBLE, DEFAULT_EDITOR_BACKGROUND_COLOR},
-    documentation::{DocumentationQuery, DocumentationRegistryKind, DocumentationResult},
+    configuration::{
+        DEFAULT_CLIENT_WINDOW_HEIGHT_PX, DEFAULT_CLIENT_WINDOW_WIDTH_PX, DEFAULT_CURSOR_VISIBLE,
+        DEFAULT_EDITOR_BACKGROUND_COLOR,
+    },
+    documentation::{
+        DocumentationQuery, DocumentationRegistryKind, DocumentationResult, KeybindingDescriptor,
+    },
     editor::EditorState,
-    events::{EditorEvent, KeyInputEvent, RenderCommand, ScenePatch, SceneUpdate, Viewport},
+    events::{
+        EditorEvent, KeyInputEvent, PaneScene, RenderCommand, ScenePatch, SceneUpdate, Viewport,
+    },
     ipc::{bind_server_socket, connect_to_server, read_json_line, socket_path, write_json_line},
-    js_runtime::spawn_js_runtime,
+    js_runtime::{JsRuntimeCommand, spawn_js_runtime},
     protocol::{ClientId, ClientToServer, ServerToClient},
+    window_layout::{DwimSplitThresholds, SplitAxis, WindowLayout},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +41,9 @@ struct ClientConnection {
     state: ClientConnectionState,
     tx: mpsc::UnboundedSender<ServerToClient>,
     viewport: Viewport,
+    window_width: u32,
+    window_height: u32,
+    layout: WindowLayout,
     pending_chord: Vec<SimpleChord>,
 }
 
@@ -97,14 +108,45 @@ enum KeyResolution {
     None,
 }
 
+#[derive(Debug, Clone)]
+struct RegisteredKeybinding {
+    command_id: CommandId,
+    descriptor: KeybindingDescriptor,
+}
+
 #[derive(Debug, Default)]
 struct Keymap {
-    bindings: HashMap<KeyChord, CommandId>,
+    bindings: HashMap<KeyChord, RegisteredKeybinding>,
 }
 
 impl Keymap {
-    fn bind(&mut self, chord: KeyChord, command_id: CommandId) {
-        self.bindings.insert(chord, command_id);
+    fn bind(&mut self, chord: KeyChord, binding: RegisteredKeybinding) {
+        self.bindings.insert(chord, binding);
+    }
+
+    fn bind_builtin(
+        &mut self,
+        chord_text: &str,
+        command_id: CommandId,
+        title: &str,
+    ) -> Result<(), String> {
+        let chord = parse_key_chord(chord_text)?;
+        let command_id_text = command_id.as_str().to_string();
+        self.bind(
+            chord,
+            RegisteredKeybinding {
+                command_id,
+                descriptor: KeybindingDescriptor {
+                    chord: chord_text.into(),
+                    command_id: command_id_text,
+                    title: title.into(),
+                    description: "Built-in editor keybinding handled by Rust.".into(),
+                    source: crate::commands::CommandSource::Builtin,
+                    owner: None,
+                },
+            },
+        );
+        Ok(())
     }
 
     fn resolve_state(&self, chord: &[SimpleChord]) -> KeyResolution {
@@ -125,7 +167,19 @@ impl Keymap {
     }
 
     fn lookup(&self, chord: &[SimpleChord]) -> Option<CommandId> {
-        self.bindings.get(&KeyChord(chord.to_vec())).cloned()
+        self.bindings
+            .get(&KeyChord(chord.to_vec()))
+            .map(|binding| binding.command_id.clone())
+    }
+
+    fn list_descriptors(&self) -> Vec<KeybindingDescriptor> {
+        let mut bindings: Vec<_> = self
+            .bindings
+            .values()
+            .map(|binding| binding.descriptor.clone())
+            .collect();
+        bindings.sort_by(|a, b| a.chord.cmp(&b.chord).then(a.command_id.cmp(&b.command_id)));
+        bindings
     }
 }
 
@@ -183,16 +237,13 @@ impl Default for EditorServer {
             .expect("builtin documentation registration should be valid");
 
         let mut keymap = Keymap::default();
-        keymap.bind(
-            KeyChord(vec![SimpleChord {
-                key: "backspace".into(),
-                ctrl: false,
-                alt: false,
-                shift: false,
-                meta: false,
-            }]),
-            CommandId::new("editor.backspace").expect("builtin id"),
-        );
+        keymap
+            .bind_builtin(
+                "backspace",
+                CommandId::new("editor.backspace").expect("builtin id"),
+                "Backspace",
+            )
+            .expect("builtin keybinding should be valid");
 
         Self {
             editor: EditorState::default(),
@@ -221,6 +272,9 @@ impl EditorServer {
                 state: ClientConnectionState::Connected,
                 tx,
                 viewport: Viewport::default(),
+                window_width: DEFAULT_CLIENT_WINDOW_WIDTH_PX as u32,
+                window_height: DEFAULT_CLIENT_WINDOW_HEIGHT_PX as u32,
+                layout: WindowLayout::new(),
                 pending_chord: Vec::new(),
             },
         );
@@ -236,7 +290,11 @@ impl EditorServer {
         self.clients.remove(&client_id);
     }
 
-    fn scene_snapshot_for_viewport(&self, viewport: Viewport) -> SceneUpdate {
+    fn scene_snapshot_for_viewport(
+        &self,
+        viewport: Viewport,
+        panes: Vec<PaneScene>,
+    ) -> SceneUpdate {
         let (start_char, end_char, text) = self.visible_text_for_viewport(viewport);
         let cursor = self.editor.cursor.clamp(start_char, end_char) - start_char;
         SceneUpdate {
@@ -244,11 +302,12 @@ impl EditorServer {
             text,
             cursor_char_index: cursor,
             cursor_visible: self.scene_settings.cursor_visible,
+            panes,
         }
     }
 
     fn visible_text_for_viewport(&self, viewport: Viewport) -> (usize, usize, String) {
-        let total_lines = self.editor.buffer.full_text().lines().count().max(1);
+        let total_lines = self.editor.buffer.line_count();
         let start_line = viewport.start_line.min(total_lines.saturating_sub(1));
         let end_line = viewport.end_line.max(start_line + 1).min(total_lines);
         let start_char = self.editor.buffer.line_col_to_char(start_line, 0);
@@ -262,14 +321,14 @@ impl EditorServer {
     }
 
     fn send_scene_snapshot_to_client(&mut self, client_id: ClientId) {
-        let viewport = self
+        let (viewport, panes) = self
             .clients
             .get(&client_id)
-            .map(|client| client.viewport)
-            .unwrap_or_default();
+            .map(|client| (client.viewport, pane_scenes(client)))
+            .unwrap_or_else(|| (Viewport::default(), vec![]));
         self.send_to_client(
             client_id,
-            ServerToClient::SceneSnapshot(self.scene_snapshot_for_viewport(viewport)),
+            ServerToClient::SceneSnapshot(self.scene_snapshot_for_viewport(viewport, panes)),
         );
     }
 
@@ -317,6 +376,59 @@ impl EditorServer {
         }
     }
 
+    fn bind_config_keybinding(&mut self, chord: String, command_id: String) -> Result<(), String> {
+        let parsed_chord = parse_key_chord(&chord)?;
+        let command_id = CommandId::new(command_id)?;
+        if self.command_registry.handler_for(&command_id).is_none() {
+            return Err(format!(
+                "cannot bind unknown command id: {}",
+                command_id.as_str()
+            ));
+        }
+        let title = self
+            .command_registry
+            .command_title(&command_id)
+            .unwrap_or(command_id.as_str())
+            .to_string();
+        self.keymap.bind(
+            parsed_chord,
+            RegisteredKeybinding {
+                command_id: command_id.clone(),
+                descriptor: KeybindingDescriptor {
+                    chord,
+                    command_id: command_id.as_str().to_string(),
+                    title,
+                    description: "Keybinding registered by ~/.config/st/init.js.".into(),
+                    source: crate::commands::CommandSource::Builtin,
+                    owner: Some("init.js".into()),
+                },
+            },
+        );
+        Ok(())
+    }
+
+    fn split_client_window(
+        &mut self,
+        client_id: ClientId,
+        axis: Option<SplitAxis>,
+    ) -> Result<(), String> {
+        let client = self
+            .clients
+            .get_mut(&client_id)
+            .ok_or_else(|| format!("unknown client id: {:?}", client_id))?;
+        let result = match axis {
+            Some(axis) => client
+                .layout
+                .split(axis, client.window_width, client.window_height),
+            None => client.layout.split_dwim(
+                client.window_width,
+                client.window_height,
+                DwimSplitThresholds::default(),
+            ),
+        };
+        result.map(|_| ()).map_err(|err| err.to_string())
+    }
+
     fn send_to_all(&mut self, message: ServerToClient) {
         if let Ok(encoded) = serde_json::to_vec(&message) {
             self.metrics.ipc_outbound_bytes += (encoded.len() + 1) as u64;
@@ -351,8 +463,42 @@ impl EditorServer {
         js_event_tx: &mpsc::UnboundedSender<EditorEvent>,
     ) {
         match self.command_registry.handler_for(&command_id).cloned() {
-            Some(crate::commands::CommandHandler::RustBuiltin(_)) => {
-                if let Err(err) = self
+            Some(crate::commands::CommandHandler::RustBuiltin(kind)) => {
+                let split_result = match kind {
+                    crate::commands::RustBuiltinCommand::SplitWindowHorizontal => {
+                        Some(self.split_client_window(client_id, Some(SplitAxis::Horizontal)))
+                    }
+                    crate::commands::RustBuiltinCommand::SplitWindowVertical => {
+                        Some(self.split_client_window(client_id, Some(SplitAxis::Vertical)))
+                    }
+                    crate::commands::RustBuiltinCommand::SplitWindowDwim => {
+                        Some(self.split_client_window(client_id, None))
+                    }
+                    _ => None,
+                };
+
+                if let Some(result) = split_result {
+                    if let Err(err) = result {
+                        self.send_to_client(
+                            client_id,
+                            ServerToClient::CommandResult {
+                                command_id: command_id.as_str().to_string(),
+                                success: false,
+                                message: err,
+                            },
+                        );
+                    } else {
+                        self.send_to_client(
+                            client_id,
+                            ServerToClient::CommandResult {
+                                command_id: command_id.as_str().to_string(),
+                                success: true,
+                                message: "split accepted".into(),
+                            },
+                        );
+                        self.send_scene_snapshot_to_client(client_id);
+                    }
+                } else if let Err(err) = self
                     .command_registry
                     .execute(CommandInvocation::new(command_id), &mut self.editor)
                 {
@@ -468,7 +614,42 @@ impl EditorServer {
                     }
                 };
 
-                if let Err(err) = self.command_registry.execute(invocation, &mut self.editor) {
+                let split_result = match self.command_registry.handler_for(&invocation.command_id) {
+                    Some(crate::commands::CommandHandler::RustBuiltin(
+                        crate::commands::RustBuiltinCommand::SplitWindowHorizontal,
+                    )) => Some(self.split_client_window(client_id, Some(SplitAxis::Horizontal))),
+                    Some(crate::commands::CommandHandler::RustBuiltin(
+                        crate::commands::RustBuiltinCommand::SplitWindowVertical,
+                    )) => Some(self.split_client_window(client_id, Some(SplitAxis::Vertical))),
+                    Some(crate::commands::CommandHandler::RustBuiltin(
+                        crate::commands::RustBuiltinCommand::SplitWindowDwim,
+                    )) => Some(self.split_client_window(client_id, None)),
+                    _ => None,
+                };
+
+                if let Some(result) = split_result {
+                    if let Err(err) = result {
+                        self.send_to_client(
+                            client_id,
+                            ServerToClient::CommandResult {
+                                command_id: invocation.command_id.as_str().to_string(),
+                                success: false,
+                                message: err,
+                            },
+                        );
+                    } else {
+                        self.send_to_client(
+                            client_id,
+                            ServerToClient::CommandResult {
+                                command_id: invocation.command_id.as_str().to_string(),
+                                success: true,
+                                message: "split accepted".into(),
+                            },
+                        );
+                        self.send_scene_snapshot_to_client(client_id);
+                    }
+                } else if let Err(err) = self.command_registry.execute(invocation, &mut self.editor)
+                {
                     self.send_to_client(client_id, ServerToClient::Error { message: err });
                 } else {
                     self.send_scene_patch_updates();
@@ -511,6 +692,13 @@ impl EditorServer {
                 }
                 self.send_scene_snapshot_to_client(client_id);
             }
+            ClientToServer::SetWindowDimensions { width, height } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.window_width = width.max(1);
+                    client.window_height = height.max(1);
+                }
+                self.send_scene_snapshot_to_client(client_id);
+            }
             ClientToServer::RegisterJsCommand {
                 extension_id,
                 command_id,
@@ -548,15 +736,80 @@ impl EditorServer {
                 }
             }
             ClientToServer::RegisterJsKeybinding {
-                extension_id: _,
+                extension_id,
                 chord,
                 command_id,
-            } => match (parse_key_chord(&chord), CommandId::new(command_id)) {
-                (Ok(chord), Ok(command_id)) => self.keymap.bind(chord, command_id),
-                (Err(err), _) | (_, Err(err)) => {
-                    self.send_to_client(client_id, ServerToClient::Error { message: err });
+            } => {
+                let parsed_chord = match parse_key_chord(&chord) {
+                    Ok(chord) => chord,
+                    Err(err) => {
+                        self.send_to_client(client_id, ServerToClient::Error { message: err });
+                        return false;
+                    }
+                };
+                let command_id = match CommandId::new(command_id) {
+                    Ok(command_id) => command_id,
+                    Err(err) => {
+                        self.send_to_client(client_id, ServerToClient::Error { message: err });
+                        return false;
+                    }
+                };
+
+                match self.command_registry.handler_for(&command_id) {
+                    Some(crate::commands::CommandHandler::JsCommand {
+                        extension_id: owner,
+                        ..
+                    }) if owner == &extension_id => {
+                        let title = self
+                            .command_registry
+                            .command_title(&command_id)
+                            .unwrap_or(command_id.as_str())
+                            .to_string();
+                        self.keymap.bind(
+                            parsed_chord,
+                            RegisteredKeybinding {
+                                command_id: command_id.clone(),
+                                descriptor: KeybindingDescriptor {
+                                    chord,
+                                    command_id: command_id.as_str().to_string(),
+                                    title,
+                                    description: format!(
+                                        "Extension keybinding registered by {extension_id}."
+                                    ),
+                                    source: crate::commands::CommandSource::Extension,
+                                    owner: Some(extension_id),
+                                },
+                            },
+                        );
+                    }
+                    Some(crate::commands::CommandHandler::JsCommand { .. }) => {
+                        self.send_to_client(
+                            client_id,
+                            ServerToClient::Error {
+                                message:
+                                    "extension cannot bind a command owned by another extension"
+                                        .into(),
+                            },
+                        );
+                    }
+                    Some(_) => {
+                        self.send_to_client(
+                            client_id,
+                            ServerToClient::Error {
+                                message: "JS keybindings may only target JS commands".into(),
+                            },
+                        );
+                    }
+                    None => {
+                        self.send_to_client(
+                            client_id,
+                            ServerToClient::Error {
+                                message: "cannot bind unknown command id".into(),
+                            },
+                        );
+                    }
                 }
-            },
+            }
         }
 
         false
@@ -589,8 +842,8 @@ impl EditorServer {
                     },
                 }
             }
-            DocumentationQuery::ListKeybindings => DocumentationResult::EmptyPlaceholder {
-                registry: DocumentationRegistryKind::Keybindings,
+            DocumentationQuery::ListKeybindings => DocumentationResult::KeybindingsList {
+                keybindings: self.keymap.list_descriptors(),
             },
             DocumentationQuery::ListModes => DocumentationResult::EmptyPlaceholder {
                 registry: DocumentationRegistryKind::Modes,
@@ -604,8 +857,8 @@ impl EditorServer {
             DocumentationQuery::ListPermissions => DocumentationResult::EmptyPlaceholder {
                 registry: DocumentationRegistryKind::Permissions,
             },
-            DocumentationQuery::ListApis => DocumentationResult::EmptyPlaceholder {
-                registry: DocumentationRegistryKind::Apis,
+            DocumentationQuery::ListApis => DocumentationResult::ApiList {
+                apis: crate::documentation::builtin_api_docs(),
             },
         }
     }
@@ -644,7 +897,8 @@ async fn run_server(options: ServerOptions) -> io::Result<()> {
     let server_queue_depth = Arc::new(AtomicUsize::new(0));
     let (js_event_tx, js_event_rx) = mpsc::unbounded_channel::<EditorEvent>();
     let (js_render_tx, mut js_render_rx) = mpsc::unbounded_channel::<RenderCommand>();
-    let js_thread = spawn_js_runtime(js_event_rx, js_render_tx);
+    let (js_command_tx, mut js_command_rx) = mpsc::unbounded_channel::<JsRuntimeCommand>();
+    let js_thread = spawn_js_runtime(js_event_rx, js_render_tx, js_command_tx);
     let mut server = EditorServer::default();
 
     println!("Server: listening on {}", path.display());
@@ -730,6 +984,22 @@ async fn run_server(options: ServerOptions) -> io::Result<()> {
                     let _ = server_tx.send(ServerEvent::JsRenderCommand(command));
                 }
             }
+            command = js_command_rx.recv() => {
+                if let Some(command) = command {
+                    match command {
+                        JsRuntimeCommand::EditorCommand(command) => {
+                            if let Some(client_id) = server.clients.keys().next().copied() {
+                                let _ = server.handle_message(client_id, ClientToServer::Command(command), &js_event_tx);
+                            }
+                        }
+                        JsRuntimeCommand::BindKey { chord, command_id } => {
+                            if let Err(err) = server.bind_config_keybinding(chord, command_id) {
+                                eprintln!("Config keybinding registration failed: {err}");
+                            }
+                        }
+                    }
+                }
+            }
         }
     };
 
@@ -751,9 +1021,34 @@ async fn run_server(options: ServerOptions) -> io::Result<()> {
     result
 }
 
+fn pane_scenes(client: &ClientConnection) -> Vec<PaneScene> {
+    client
+        .layout
+        .pane_rects(client.window_width, client.window_height)
+        .into_iter()
+        .map(|rect| PaneScene {
+            pane_id: rect.pane_id,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            active: rect.active,
+        })
+        .collect()
+}
+
+fn normalize_key_name(key: &str) -> String {
+    match key.to_ascii_lowercase().as_str() {
+        " " | "spacebar" => "space".into(),
+        "return" => "enter".into(),
+        "esc" => "escape".into(),
+        other => other.into(),
+    }
+}
+
 fn normalize_key_input(event: &KeyInputEvent) -> SimpleChord {
     SimpleChord {
-        key: event.logical_key.to_ascii_lowercase(),
+        key: normalize_key_name(&event.logical_key),
         ctrl: event.ctrl,
         alt: event.alt,
         shift: event.shift,
@@ -763,36 +1058,90 @@ fn normalize_key_input(event: &KeyInputEvent) -> SimpleChord {
 
 fn parse_key_chord(chord: &str) -> Result<KeyChord, String> {
     let mut parts = Vec::new();
-    for part in chord.split_whitespace() {
-        let mut simple = SimpleChord {
-            key: String::new(),
-            ctrl: false,
-            alt: false,
-            shift: false,
-            meta: false,
-        };
+    let mut active_modifiers = KeyModifiers::default();
 
-        for piece in part.split('+') {
-            match piece.to_ascii_lowercase().as_str() {
-                "ctrl" => simple.ctrl = true,
-                "alt" => simple.alt = true,
-                "shift" => simple.shift = true,
-                "meta" | "cmd" => simple.meta = true,
-                key => simple.key = key.to_string(),
-            }
+    for segment in chord.split_whitespace() {
+        let parsed = parse_key_chord_segment(segment, active_modifiers)?;
+        match parsed {
+            ParsedChordSegment::Modifiers(modifiers) => active_modifiers = modifiers,
+            ParsedChordSegment::Key(simple) => parts.push(simple),
         }
-
-        if simple.key.is_empty() {
-            return Err(format!("invalid key chord segment: {part}"));
-        }
-        parts.push(simple);
     }
 
     if parts.is_empty() {
-        return Err("key chord must not be empty".into());
+        return Err("key chord must include at least one non-modifier key".into());
     }
 
     Ok(KeyChord(parts))
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct KeyModifiers {
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+}
+
+enum ParsedChordSegment {
+    Modifiers(KeyModifiers),
+    Key(SimpleChord),
+}
+
+fn parse_key_chord_segment(
+    segment: &str,
+    active_modifiers: KeyModifiers,
+) -> Result<ParsedChordSegment, String> {
+    let mut modifiers = active_modifiers;
+    let mut explicit_modifier_seen = false;
+    let mut key: Option<String> = None;
+
+    for piece in segment.split('+') {
+        if piece.is_empty() {
+            return Err(format!(
+                "invalid empty key chord piece in segment: {segment}"
+            ));
+        }
+        match piece.to_ascii_lowercase().as_str() {
+            "ctrl" => {
+                modifiers.ctrl = true;
+                explicit_modifier_seen = true;
+            }
+            "alt" => {
+                modifiers.alt = true;
+                explicit_modifier_seen = true;
+            }
+            "shift" => {
+                modifiers.shift = true;
+                explicit_modifier_seen = true;
+            }
+            "meta" | "cmd" => {
+                modifiers.meta = true;
+                explicit_modifier_seen = true;
+            }
+            key_piece => {
+                if key.replace(normalize_key_name(key_piece)).is_some() {
+                    return Err(format!(
+                        "key chord segment may contain at most one non-modifier key: {segment}"
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(key) = key {
+        Ok(ParsedChordSegment::Key(SimpleChord {
+            key,
+            ctrl: modifiers.ctrl,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+            meta: modifiers.meta,
+        }))
+    } else if explicit_modifier_seen {
+        Ok(ParsedChordSegment::Modifiers(modifiers))
+    } else {
+        Err(format!("invalid key chord segment: {segment}"))
+    }
 }
 
 fn key_input_to_command_invocation(event: &KeyInputEvent) -> Option<CommandInvocation> {
@@ -833,16 +1182,10 @@ fn key_input_to_command_invocation(event: &KeyInputEvent) -> Option<CommandInvoc
     ))
 }
 
-fn should_forward_to_js_runtime(event: &KeyInputEvent, handled_by_rust: bool) -> bool {
-    if handled_by_rust {
-        return false;
-    }
-
-    // Temporary Phase 10 policy:
-    // - Rust handles ordinary text/backspace/left/right directly.
-    // - Unhandled keys (including modified chords) are forwarded to JS for logging/debugging.
-    // - Later, extension keybindings will register with Rust and drive selective JS invocation.
-    event.ctrl || event.alt || event.meta || event.shift || event.text.is_none()
+fn should_forward_to_js_runtime(_event: &KeyInputEvent, _handled_by_rust: bool) -> bool {
+    // Deno does not receive every key by default. JavaScript is invoked only through
+    // capabilities registered in Rust-owned registries/keymaps.
+    false
 }
 
 async fn handle_client(
@@ -1007,7 +1350,10 @@ mod tests {
                 cursor_visible: true,
             }))
         );
-        assert_eq!(client_1_rx.try_recv(), Err(mpsc::error::TryRecvError::Empty));
+        assert_eq!(
+            client_1_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        );
         assert_eq!(
             client_2_rx.try_recv(),
             Ok(ServerToClient::ScenePatch(ScenePatch::VisibleTextUpdate {
@@ -1018,7 +1364,10 @@ mod tests {
                 cursor_visible: true,
             }))
         );
-        assert_eq!(client_2_rx.try_recv(), Err(mpsc::error::TryRecvError::Empty));
+        assert_eq!(
+            client_2_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        );
     }
 
     #[test]
@@ -1065,7 +1414,7 @@ mod tests {
 
     #[test]
     fn parses_multi_key_chords() {
-        let chord = parse_key_chord("ctrl+x ctrl+s").expect("parse chord");
+        let chord = parse_key_chord("ctrl x ctrl s").expect("parse chord");
         assert_eq!(chord.0.len(), 2);
         assert!(chord.0[0].ctrl);
         assert_eq!(chord.0[0].key, "x");
@@ -1074,13 +1423,47 @@ mod tests {
     }
 
     #[test]
-    fn forwarding_policy_forwards_unhandled_modified_or_special_keys() {
+    fn parses_modifier_group_followed_by_one_or_more_keys() {
+        let chord = parse_key_chord("ctrl+shift w h").expect("parse emacs-style chord");
+        assert_eq!(chord.0.len(), 2);
+        assert_eq!(chord.0[0].key, "w");
+        assert!(chord.0[0].ctrl);
+        assert!(chord.0[0].shift);
+        assert_eq!(chord.0[1].key, "h");
+        assert!(chord.0[1].ctrl);
+        assert!(chord.0[1].shift);
+    }
+
+    #[test]
+    fn rejects_modifier_only_chords_without_a_key() {
+        let err = parse_key_chord("ctrl+shift").expect_err("key is required");
+        assert!(err.contains("at least one non-modifier key"));
+    }
+
+    #[test]
+    fn normalizes_named_keys_for_keybindings() {
+        let chord = parse_key_chord("ctrl space enter escape").expect("parse named keys");
+        assert_eq!(
+            chord
+                .0
+                .iter()
+                .map(|simple| simple.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["space", "enter", "escape"]
+        );
+        assert!(chord.0.iter().all(|simple| simple.ctrl));
+        assert_eq!(normalize_key_name("Esc"), "escape");
+        assert_eq!(normalize_key_name("Return"), "enter");
+    }
+
+    #[test]
+    fn forwarding_policy_does_not_send_unregistered_keys_to_js() {
         let mut modified = key_event("a", Some("a"));
         modified.ctrl = true;
-        assert!(should_forward_to_js_runtime(&modified, false));
+        assert!(!should_forward_to_js_runtime(&modified, false));
 
         let special = key_event("Escape", None);
-        assert!(should_forward_to_js_runtime(&special, false));
+        assert!(!should_forward_to_js_runtime(&special, false));
     }
 
     #[test]
@@ -1180,6 +1563,56 @@ mod tests {
     }
 
     #[test]
+    fn documentation_query_lists_keybindings_from_live_keymap() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(!server.handle_message(
+            client_id,
+            ClientToServer::DocumentationQuery(DocumentationQuery::ListKeybindings),
+            &js_tx,
+        ));
+
+        let ServerToClient::DocumentationResult(DocumentationResult::KeybindingsList {
+            keybindings,
+        }) = client_rx.try_recv().expect("docs result")
+        else {
+            panic!("expected keybindings list");
+        };
+
+        assert!(keybindings.iter().any(|binding| {
+            binding.chord == "backspace" && binding.command_id == "editor.backspace"
+        }));
+    }
+
+    #[test]
+    fn documentation_query_lists_builtin_api_docs() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(!server.handle_message(
+            client_id,
+            ClientToServer::DocumentationQuery(DocumentationQuery::ListApis),
+            &js_tx,
+        ));
+
+        let ServerToClient::DocumentationResult(DocumentationResult::ApiList { apis }) =
+            client_rx.try_recv().expect("docs result")
+        else {
+            panic!("expected api list");
+        };
+
+        assert!(apis.iter().any(|api| api.id == "config.loading"));
+        assert!(apis.iter().any(|api| api.id == "api.keymap.bind"));
+    }
+
+    #[test]
     fn scene_update_uses_configurable_scene_settings() {
         let mut server = EditorServer::default();
         server.scene_settings = EditorSceneSettings {
@@ -1187,7 +1620,7 @@ mod tests {
             cursor_visible: false,
         };
 
-        let scene = server.scene_snapshot_for_viewport(Viewport::default());
+        let scene = server.scene_snapshot_for_viewport(Viewport::default(), vec![]);
         assert_eq!(scene.background_color, 0x112233);
         assert!(!scene.cursor_visible);
     }
@@ -1317,6 +1750,30 @@ mod tests {
         assert!(matches!(
             client_rx.try_recv(),
             Ok(ServerToClient::Error { .. })
+        ));
+    }
+
+    #[test]
+    fn js_keybinding_registration_rejects_unknown_command() {
+        let mut server = EditorServer::default();
+        let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+        let (js_tx, _js_rx) = mpsc::unbounded_channel();
+        let client_id = ClientId(1);
+        server.register_client(client_id, client_tx);
+
+        assert!(!server.handle_message(
+            client_id,
+            ClientToServer::RegisterJsKeybinding {
+                extension_id: "ext.test".into(),
+                chord: "ctrl+d".into(),
+                command_id: "ext.missing".into(),
+            },
+            &js_tx,
+        ));
+
+        assert!(matches!(
+            client_rx.try_recv(),
+            Ok(ServerToClient::Error { message }) if message.contains("unknown command")
         ));
     }
 

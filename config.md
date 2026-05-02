@@ -7,7 +7,7 @@ This document records the intended direction for `st` configuration, extensions,
 Use a hybrid model:
 
 ```text
-TypeScript-first configuration
+JavaScript-first configuration
 +
 optional YAML declarative files
 +
@@ -18,13 +18,13 @@ This combines the flexibility of Emacs-style executable configuration with YAML'
 
 ## Core Principle
 
-Rust exposes safe editor capabilities. TypeScript composes those capabilities. YAML describes data.
+Rust exposes safe editor capabilities. JavaScript composes those capabilities. YAML describes data.
 
 ```text
 Rust core
   owns editor state, rendering protocol, buffers, sessions, transactions, permissions
 
-TypeScript config/runtime
+JavaScript config/runtime
   composes capabilities exposed by Rust
   registers commands, keybindings, tools, hooks, extensions
 
@@ -37,24 +37,24 @@ YAML should not become the primary extension language. If YAML becomes responsib
 
 ## Primary Config Entrypoint
 
-The primary user configuration file should be executable TypeScript:
+The primary user configuration file should be executable JavaScript:
 
 ```text
-~/.config/st/init.ts
+~/.config/st/init.js
 ```
 
 Example:
 
-```ts
-import { editor, keymap, extensions, tools, config } from "st";
-
+```js
 editor.set({
   theme: "catppuccin",
   fontSize: 14,
 });
 
-keymap.bind("ctrl+s", "file.save");
-keymap.bind("ctrl+p", "commandPalette.open");
+keymap.bind("ctrl s", "file.save");
+keymap.bind("ctrl p", "commandPalette.open");
+// Modifier groups can prefix one or more keys, Emacs-style.
+keymap.bind("ctrl+shift w h", "window.split_horizontal");
 
 await extensions.loadDir("~/.config/st/extensions");
 await tools.loadDir("~/.config/st/tools");
@@ -65,7 +65,7 @@ editor.set(settings.editor ?? {});
 
 ## Optional YAML Files
 
-YAML files are supported as declarative data and may be loaded by `init.ts`.
+YAML files are supported as declarative data and may be loaded by `init.js`.
 
 Conventional but non-mandatory examples:
 
@@ -92,9 +92,9 @@ tool_dirs:
   - ~/.local/share/st/tools
 ```
 
-Then `init.ts` can decide how to apply it:
+Then `init.js` can decide how to apply it:
 
-```ts
+```js
 const cfg = await config.loadYaml("~/.config/st/settings.yml");
 
 editor.set(cfg.editor ?? {});
@@ -114,8 +114,8 @@ Provide useful defaults, but do not make them mandatory.
 
 Users should be able to do any of these:
 
-```ts
-await import("./my-custom-editor.ts");
+```js
+await import("./my-custom-editor.js");
 await config.loadYamlConfig("./config.yml");
 await extensions.loadDir("~/work/editor-extensions");
 await tools.loadDir("~/ai-generated-tools");
@@ -133,7 +133,7 @@ Support both lightweight script extensions and packaged extensions.
 ~/.config/st/extensions/insert-date.ts
 ```
 
-```ts
+```js
 import { commands, editor } from "st";
 
 commands.register("user.insertDate", () => {
@@ -161,13 +161,13 @@ contributes:
     - id: user.my-extension.insertDate
       title: Insert Date
   keybindings:
-    - key: ctrl+d
+    - key: ctrl d
       command: user.my-extension.insertDate
 ```
 
 Entrypoint:
 
-```ts
+```js
 import { commands, editor } from "st";
 
 commands.register("user.my-extension.insertDate", () => {
@@ -177,14 +177,14 @@ commands.register("user.my-extension.insertDate", () => {
 
 Loading remains user-controlled:
 
-```ts
+```js
 await extensions.load("~/.config/st/extensions/my-extension");
 await extensions.loadDir("~/.config/st/extensions");
 ```
 
 ## AI-Created Tools
 
-AI agents should be able to create tools as TypeScript implementation plus YAML/JSON metadata.
+AI agents should be able to create tools as JavaScript implementation plus YAML/JSON metadata.
 
 Example:
 
@@ -207,7 +207,7 @@ permissions:
 
 `main.ts`:
 
-```ts
+```js
 import { tools, editor } from "st";
 
 tools.register("user.summarizeSelection", async () => {
@@ -222,11 +222,11 @@ tools.register("user.summarizeSelection", async () => {
 
 The user decides whether to load generated tools:
 
-```ts
+```js
 await tools.loadDir("~/.config/st/tools");
 ```
 
-or via YAML consumed by `init.ts`:
+or via YAML consumed by `init.js`:
 
 ```yaml
 tool_dirs:
@@ -281,8 +281,8 @@ This prevents blocked agent code from freezing normal editor behavior.
 
 ## Recommended Implementation Path
 
-1. Add `~/.config/st/init.ts` as the primary config entrypoint.
-2. Expose a small TypeScript API from Rust/Deno.
+1. Add `~/.config/st/init.js` as the primary config entrypoint.
+2. Expose a small JavaScript API from Rust/Deno.
 3. Add YAML loading as a helper API, not the primary behavior engine.
 4. Add extension loading from explicit files/directories.
 5. Add optional extension manifests.
@@ -296,7 +296,7 @@ This prevents blocked agent code from freezing normal editor behavior.
 The intended model is:
 
 ```text
-init.ts is authoritative
+init.js is authoritative
 YAML is declarative data
 manifests describe reusable extensions/tools
 Rust validates and applies all state changes

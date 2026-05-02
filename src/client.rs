@@ -9,13 +9,13 @@ use tokio::{io::BufReader, net::UnixStream, sync::mpsc as tokio_mpsc, time::slee
 
 use crate::{
     configuration::{DEFAULT_AUTO_STARTED_IDLE_TIMEOUT_SECS, DEFAULT_EDITOR_BACKGROUND_COLOR},
-    events::{EditorEvent, ScenePatch, SceneUpdate, Viewport},
+    events::{EditorEvent, PaneScene, ScenePatch, SceneUpdate, Viewport},
     ipc::{connect_to_server, read_json_line, socket_path, write_json_line},
     protocol::{ClientId, ClientToServer, ServerToClient},
     render::{UiChannels, run_ui_with_gpui},
 };
 
-fn scene_update_from_patch(patch: ScenePatch) -> Option<SceneUpdate> {
+fn scene_update_from_patch(patch: ScenePatch, panes: Vec<PaneScene>) -> Option<SceneUpdate> {
     match patch {
         ScenePatch::VisibleTextUpdate {
             text,
@@ -27,6 +27,7 @@ fn scene_update_from_patch(patch: ScenePatch) -> Option<SceneUpdate> {
             text,
             cursor_char_index,
             cursor_visible,
+            panes,
         }),
         _ => None,
     }
@@ -118,6 +119,8 @@ fn spawn_ipc_thread(
             )
             .await;
 
+            let mut current_panes = Vec::new();
+
             loop {
                 tokio::select! {
                     ui_event = ui_rx.recv() => {
@@ -142,6 +145,15 @@ fn spawn_ipc_thread(
                             EditorEvent::ExecuteJsCommand { .. } => {
                                 // UI thread never emits this; server->JS runtime path only.
                             }
+                            EditorEvent::WindowDimensionsChanged { width, height } => {
+                                if let Err(err) = write_json_line(
+                                    &mut writer,
+                                    &ClientToServer::SetWindowDimensions { width, height },
+                                ).await {
+                                    eprintln!("Client: failed to send window dimensions: {err}");
+                                    break;
+                                }
+                            }
                             EditorEvent::Shutdown => {
                                 let _ = write_json_line(
                                     &mut writer,
@@ -157,10 +169,11 @@ fn spawn_ipc_thread(
                                 println!("Client: unexpected second welcome for {client_id:?}");
                             }
                             Ok(Some(ServerToClient::SceneSnapshot(scene))) => {
+                                current_panes = scene.panes.clone();
                                 let _ = scene_tx.send(scene);
                             }
                             Ok(Some(ServerToClient::ScenePatch(patch))) => {
-                                if let Some(scene) = scene_update_from_patch(patch) {
+                                if let Some(scene) = scene_update_from_patch(patch, current_panes.clone()) {
                                     let _ = scene_tx.send(scene);
                                 }
                             }
@@ -176,6 +189,11 @@ fn spawn_ipc_thread(
                             }
                             Ok(Some(ServerToClient::DocumentationResult(result))) => {
                                 println!("Client help: {result:?}");
+                            }
+                            Ok(Some(ServerToClient::CommandResult { command_id, success, message })) => {
+                                if !success {
+                                    eprintln!("Client: command {command_id} failed: {message}");
+                                }
                             }
                             Ok(None) => {
                                 println!("Client: server disconnected");
@@ -245,13 +263,16 @@ mod tests {
 
     #[test]
     fn visible_text_patch_preserves_server_cursor_in_scene_update() {
-        let scene = scene_update_from_patch(ScenePatch::VisibleTextUpdate {
-            start_line: 0,
-            end_line: 200,
-            text: "abc".into(),
-            cursor_char_index: 3,
-            cursor_visible: true,
-        })
+        let scene = scene_update_from_patch(
+            ScenePatch::VisibleTextUpdate {
+                start_line: 0,
+                end_line: 200,
+                text: "abc".into(),
+                cursor_char_index: 3,
+                cursor_visible: true,
+            },
+            vec![],
+        )
         .expect("visible text patch should become a scene update");
 
         assert_eq!(scene.text, "abc");

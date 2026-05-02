@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::documentation::SettingDescriptor;
 
-pub const DEFAULT_INIT_TS: &str = "~/.config/st/init.ts";
+pub const DEFAULT_INIT_JS: &str = "~/.config/st/init.js";
 pub const DEFAULT_SETTINGS_YAML: &str = "~/.config/st/settings.yml";
 pub const DEFAULT_EXTENSION_DIR: &str = "~/.config/st/extensions";
 pub const DEFAULT_TOOL_DIR: &str = "~/.config/st/tools";
@@ -21,6 +21,9 @@ pub const DEFAULT_AUTO_STARTED_IDLE_TIMEOUT_SECS: u64 = 300;
 pub const DEFAULT_CLIENT_WINDOW_WIDTH_PX: u64 = 900;
 pub const DEFAULT_CLIENT_WINDOW_HEIGHT_PX: u64 = 600;
 pub const DEFAULT_LINE_HEIGHT_PX: f32 = 22.0;
+pub const DEFAULT_DWIM_WIDE_ASPECT_RATIO: f32 = 1.7;
+pub const DEFAULT_DWIM_HALF_HEIGHT_ASPECT_RATIO: f32 = 1.3;
+pub const DEFAULT_DWIM_HALF_HEIGHT_MAX_PX: u32 = 600;
 
 pub const REQUIRED_CONFIGURABLE_SETTING_IDS: &[&str] = &[
     "editor.background_color",
@@ -36,6 +39,9 @@ pub const REQUIRED_CONFIGURABLE_SETTING_IDS: &[&str] = &[
     "paths.extension_dirs",
     "paths.tool_dirs",
     "keybindings.default_editor_bindings_enabled",
+    "window.split_dwim_wide_aspect_ratio",
+    "window.split_dwim_half_height_aspect_ratio",
+    "window.split_dwim_half_height_max_px",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -181,15 +187,15 @@ impl ConfigState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeScriptConfigApiShape {
+pub struct JavaScriptConfigApiShape {
     pub primary_entrypoint: &'static str,
     pub module_name: &'static str,
     pub methods: &'static [&'static str],
 }
 
-pub fn typescript_config_api_shape() -> TypeScriptConfigApiShape {
-    TypeScriptConfigApiShape {
-        primary_entrypoint: DEFAULT_INIT_TS,
+pub fn javascript_config_api_shape() -> JavaScriptConfigApiShape {
+    JavaScriptConfigApiShape {
+        primary_entrypoint: DEFAULT_INIT_JS,
         module_name: "st",
         methods: &[
             "config.loadYaml(path)",
@@ -198,6 +204,7 @@ pub fn typescript_config_api_shape() -> TypeScriptConfigApiShape {
             "extensions.loadDir(path)",
             "tools.load(path)",
             "tools.loadDir(path)",
+            "keymap.bind(chord, commandId)",
         ],
     }
 }
@@ -248,7 +255,7 @@ pub fn expand_config_path(path: &str, base_dir: Option<&Path>) -> PathBuf {
 
 pub fn default_config_locations() -> Vec<&'static str> {
     vec![
-        DEFAULT_INIT_TS,
+        DEFAULT_INIT_JS,
         DEFAULT_SETTINGS_YAML,
         DEFAULT_EXTENSION_DIR,
         DEFAULT_TOOL_DIR,
@@ -265,7 +272,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &format!("0x{DEFAULT_EDITOR_BACKGROUND_COLOR:06x}"),
             &["Any 24-bit RGB value"],
             &["editor.set({ backgroundColor: 0x1e1e2e })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "applies to newly generated scene updates",
         ),
         setting(
@@ -280,7 +287,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             },
             &["true", "false"],
             &["editor.set({ cursorVisible: true })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "applies to newly generated scene updates",
         ),
         setting(
@@ -291,7 +298,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &format!("0x{DEFAULT_EDITOR_TEXT_COLOR:06x}"),
             &["Any 24-bit RGB value"],
             &["editor.set({ textColor: 0xcdd6f4 })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "requires repaint; runtime application is future work",
         ),
         setting(
@@ -302,7 +309,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &format!("0x{DEFAULT_SELECTION_COLOR:06x}"),
             &["Any 24-bit RGB value"],
             &["editor.set({ selectionColor: 0x3b4261 })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "requires repaint; runtime application is future work",
         ),
         setting(
@@ -313,7 +320,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &DEFAULT_LINE_HEIGHT_PX.to_string(),
             &["Positive pixel value"],
             &["editor.set({ lineHeightPx: 22 })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "applies when editor views are created or re-rendered",
         ),
         setting(
@@ -324,7 +331,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &DEFAULT_CLIENT_WINDOW_WIDTH_PX.to_string(),
             &["Positive integer pixels"],
             &["editor.set({ windowWidthPx: 900 })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "applies when a client window is opened",
         ),
         setting(
@@ -335,7 +342,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &DEFAULT_CLIENT_WINDOW_HEIGHT_PX.to_string(),
             &["Positive integer pixels"],
             &["editor.set({ windowHeightPx: 600 })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "applies when a client window is opened",
         ),
         setting(
@@ -352,7 +359,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &[
                 "CLI flag --idle-timeout-secs",
                 "CLI flag --no-idle-timeout",
-                "future init.ts API",
+                "future init.js API",
             ],
             "requires server restart until runtime config reload exists",
         ),
@@ -364,7 +371,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &DEFAULT_AUTO_STARTED_IDLE_TIMEOUT_SECS.to_string(),
             &["Any non-negative integer seconds"],
             &["config.set('server.auto_start_idle_timeout_secs', 300)"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "applies before auto-starting a server process",
         ),
         setting(
@@ -377,7 +384,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             &["ST_RUNTIME_DIR=/tmp/st-runtime st"],
             &[
                 "ST_RUNTIME_DIR bootstrap environment variable",
-                "future init.ts API",
+                "future init.js API",
             ],
             "must be known before client/server IPC starts",
         ),
@@ -389,7 +396,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             "[]; conventional path ~/.config/st/extensions is not mandatory",
             &["Any readable directory path chosen by the user"],
             &["await extensions.loadDir(\"~/work/editor-extensions\")"],
-            &["init.ts", "YAML field extension_dirs consumed by init.ts"],
+            &["init.js", "YAML field extension_dirs consumed by init.js"],
             "applies when config/extensions are loaded or reloaded",
         ),
         setting(
@@ -400,7 +407,7 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             "[]; conventional path ~/.config/st/tools is not mandatory",
             &["Any readable directory path chosen by the user"],
             &["await tools.loadDir(\"~/.config/st/tools\")"],
-            &["init.ts", "YAML field tool_dirs consumed by init.ts"],
+            &["init.js", "YAML field tool_dirs consumed by init.js"],
             "applies when config/tools are loaded or reloaded",
         ),
         setting(
@@ -411,8 +418,41 @@ pub fn builtin_setting_descriptors() -> Vec<SettingDescriptor> {
             "true",
             &["true", "false"],
             &["keymap.defaults({ editor: true })"],
-            &["future init.ts API", "YAML loaded explicitly by init.ts"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
             "applies when a client process starts",
+        ),
+        setting(
+            "window.split_dwim_wide_aspect_ratio",
+            "DWIM Wide Window Aspect Ratio",
+            "Aspect-ratio threshold where DWIM first chooses a horizontal top/bottom split for a wide full-window layout.",
+            "f32 ratio",
+            &DEFAULT_DWIM_WIDE_ASPECT_RATIO.to_string(),
+            &["Positive ratio greater than half-height threshold"],
+            &["editor.set({ splitDwimWideAspectRatio: 1.7 })"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
+            "applies to subsequent DWIM split commands",
+        ),
+        setting(
+            "window.split_dwim_half_height_aspect_ratio",
+            "DWIM Half-height Vertical Aspect Ratio",
+            "Aspect-ratio threshold where DWIM chooses vertical left/right splits for wide but height-constrained windows.",
+            "f32 ratio",
+            &DEFAULT_DWIM_HALF_HEIGHT_ASPECT_RATIO.to_string(),
+            &["Positive ratio below window.split_dwim_wide_aspect_ratio"],
+            &["editor.set({ splitDwimHalfHeightAspectRatio: 1.3 })"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
+            "applies to subsequent DWIM split commands",
+        ),
+        setting(
+            "window.split_dwim_half_height_max_px",
+            "DWIM Half-height Maximum Height",
+            "Maximum window height treated as height-constrained for DWIM vertical split preference.",
+            "u32 pixels",
+            &DEFAULT_DWIM_HALF_HEIGHT_MAX_PX.to_string(),
+            &["Positive integer pixels"],
+            &["editor.set({ splitDwimHalfHeightMaxPx: 600 })"],
+            &["future init.js API", "YAML loaded explicitly by init.js"],
+            "applies to subsequent DWIM split commands",
         ),
     ]
 }
@@ -461,6 +501,18 @@ pub fn builtin_default_values() -> Vec<(&'static str, SettingValue)> {
         (
             "keybindings.default_editor_bindings_enabled",
             SettingValue::Bool(true),
+        ),
+        (
+            "window.split_dwim_wide_aspect_ratio",
+            SettingValue::FloatString(DEFAULT_DWIM_WIDE_ASPECT_RATIO.to_string()),
+        ),
+        (
+            "window.split_dwim_half_height_aspect_ratio",
+            SettingValue::FloatString(DEFAULT_DWIM_HALF_HEIGHT_ASPECT_RATIO.to_string()),
+        ),
+        (
+            "window.split_dwim_half_height_max_px",
+            SettingValue::Integer(DEFAULT_DWIM_HALF_HEIGHT_MAX_PX as u64),
         ),
     ]
 }
@@ -672,9 +724,9 @@ mod tests {
     }
 
     #[test]
-    fn exposes_typescript_first_config_shape_without_mandatory_paths() {
-        let api = typescript_config_api_shape();
-        assert_eq!(api.primary_entrypoint, DEFAULT_INIT_TS);
+    fn exposes_javascript_config_shape_without_mandatory_paths() {
+        let api = javascript_config_api_shape();
+        assert_eq!(api.primary_entrypoint, DEFAULT_INIT_JS);
         assert!(api.methods.contains(&"config.loadYaml(path)"));
         assert!(default_config_locations().contains(&DEFAULT_EXTENSION_DIR));
     }

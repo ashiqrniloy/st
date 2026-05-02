@@ -304,9 +304,9 @@ Those should be incremental, cancellable, and versioned.
 
 LSP should generally be managed by Rust and external LSP processes.
 
-TypeScript should configure LSP:
+JavaScript config should configure LSP:
 
-```ts
+```js
 lsp.register({
   language: "rust",
   command: "rust-analyzer",
@@ -366,26 +366,26 @@ server validates and applies accepted edits
 
 Use one runtime per active agent, and eventually consider one process per active agent for stronger isolation.
 
-## JavaScript, TypeScript, And JIT
+## JavaScript Runtime And JIT
 
-`deno_core` runs JavaScript in V8. TypeScript must be transpiled to JavaScript before execution.
+`deno_core` runs JavaScript in V8. st's supported runtime/config language is JavaScript; TypeScript-only syntax requires a future explicit transpilation step before execution.
 
 V8 already JIT-compiles JavaScript internally. Additional custom JIT work is generally not needed.
 
 Important caveats:
 
 - V8 JIT does not make one JS runtime parallel.
-- V8 JIT does not make TypeScript typechecking free.
+- V8 JIT does not provide TypeScript typechecking or transpilation.
 - V8 JIT does not fix large text copying or bad protocol design.
 - JS should still not own editor hot paths.
 
-Recommended TypeScript strategy:
+Recommended JavaScript strategy:
 
 ```text
-support TypeScript source
-transpile/cache compiled JavaScript
-allow packaged extensions to ship precompiled JavaScript optionally
-avoid typechecking on every startup unless requested
+support JavaScript source directly
+keep startup config execution lightweight
+allow packaged extensions to ship JavaScript
+if TypeScript is added later, transpile/cache compiled JavaScript explicitly
 provide explicit extension check/build commands later
 ```
 

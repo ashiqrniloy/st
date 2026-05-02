@@ -124,16 +124,16 @@ Everything already built and visible to the user has initial structured document
 
 ## Phase 7: Configuration Foundation
 
-Goal: establish the TypeScript-first configuration foundation before adding more user-visible behavior, extensions, tools, modes, and settings.
+Goal: establish the JavaScript-first configuration foundation before adding more user-visible behavior, extensions, tools, modes, and settings.
 
 - [x] Define configuration architecture in code using `config.md` as the rationale.
-- [x] Define default config locations, including `~/.config/st/init.ts`, without making them the only supported locations.
+- [x] Define default config locations, including `~/.config/st/init.js`, without making them the only supported locations.
 - [x] Add a typed Rust-side settings/config registry shape.
 - [x] Add setting descriptors with id, title, description, type, default, valid values/range, examples, and reload/restart behavior.
 - [x] Ensure setting descriptors integrate with the self-documentation metadata model.
-- [x] Add configuration source tracking, such as default, CLI, init.ts, YAML, extension, or runtime override.
-- [x] Define precedence rules between defaults, CLI options, init.ts, YAML-loaded values, and runtime changes.
-- [x] Add a TypeScript-facing config API shape for future `init.ts` support.
+- [x] Add configuration source tracking, such as default, CLI, init.js, YAML, extension, or runtime override.
+- [x] Define precedence rules between defaults, CLI options, init.js, YAML-loaded values, and runtime changes.
+- [x] Add a JavaScript-facing config API shape for future `init.js` support.
 - [x] Add YAML loading as declarative data support, not as the primary behavior engine.
 - [x] Add path expansion helpers for `~`, environment variables where appropriate, and relative paths.
 - [x] Add configuration validation and clear diagnostics.
@@ -410,7 +410,7 @@ editor.commands.register("insert-date", () => {
   editor.commands.execute("insert-text", new Date().toISOString());
 });
 
-editor.keymap.bind("ctrl+d", "insert-date");
+editor.keymap.bind("ctrl d", "insert-date");
 ```
 
 Target registration flow:
@@ -487,21 +487,21 @@ Test plan:
 
 Implementation tasks:
 
-- [ ] Review all code written so far.
-- [ ] Remove dead code that is not useful for future implementations.
-- [ ] Review `documentation.md`, `config.md`, and `performance.md`.
-- [ ] Fix any code deviation from `documentation.md`.
-- [ ] Fix any code deviation from `config.md`.
-- [ ] Fix any code deviation from `performance.md`.
-- [ ] Simplify implementations wherever possible without compromising architecture, correctness, documentation, configurability, or performance.
-- [ ] Review the implementation for more elegant solutions.
-- [ ] Implement more elegant solutions where they are clearly better and do not compromise project constraints.
-- [ ] Keep public/user-visible behavior documented through structured metadata.
-- [ ] Keep user-tunable behavior represented through the configuration foundation.
-- [ ] Keep Rust-owned hot paths and avoid introducing JavaScript-heavy bottlenecks.
-- [ ] Write or update tests from the test plan after implementation.
-- [ ] Validate that the tests prove each acceptance criterion is met.
-- [ ] Run formatting and the relevant/full test suite.
+- [x] Review all code written so far.
+- [x] Remove dead code that is not useful for future implementations.
+- [x] Review `documentation.md`, `config.md`, and `performance.md`.
+- [x] Fix any code deviation from `documentation.md`.
+- [x] Fix any code deviation from `config.md`.
+- [x] Fix any code deviation from `performance.md`.
+- [x] Simplify implementations wherever possible without compromising architecture, correctness, documentation, configurability, or performance.
+- [x] Review the implementation for more elegant solutions.
+- [x] Implement more elegant solutions where they are clearly better and do not compromise project constraints.
+- [x] Keep public/user-visible behavior documented through structured metadata.
+- [x] Keep user-tunable behavior represented through the configuration foundation.
+- [x] Keep Rust-owned hot paths and avoid introducing JavaScript-heavy bottlenecks.
+- [x] Write or update tests from the test plan after implementation.
+- [x] Validate that the tests prove each acceptance criterion is met.
+- [x] Run formatting and the relevant/full test suite.
 
 Milestone:
 
@@ -509,11 +509,76 @@ Milestone:
 The codebase is cleaner, simpler, aligned with documentation/configuration/performance guidance, and ready for the next UI and command phases.
 ```
 
-## Phase 16: UI Design Split Window
+## Phase 16: UI Window Management And Split Panes
 
-Goal: placeholder for split-window UI design, including horizontal and vertical split logic.
+Goal: implement server-owned window/pane layout management with manual horizontal/vertical split commands, a DWIM split command, GPUI rendering support, JS/extension APIs, and structured user-facing documentation.
 
-- [ ] Placeholder: details to be added later.
+Acceptance criteria:
+
+- A client window starts as one full-window pane and can be split into at most four panes.
+- Manual horizontal split divides the selected/active pane or full window along the X axis, producing top/bottom space within that split region.
+- Manual vertical split divides the selected/active pane or full window along the Y axis, producing left/right space within that split region.
+- From one full-window pane, one horizontal split produces two horizontal panes; one vertical split produces two vertical panes.
+- Repeating the same split direction from a two-pane same-axis layout produces exactly three same-axis panes and makes that layout terminal for further splits.
+- From a two-pane horizontal layout, a vertical split splits one unsplit pane; a second vertical split splits the remaining unsplit pane, producing four panes; no additional splits are allowed.
+- From a two-pane vertical layout, a horizontal split splits one unsplit pane; a second horizontal split splits the remaining unsplit pane, producing four panes; no additional splits are allowed.
+- Mixed split behavior is deterministic: the active pane is preferred when eligible, otherwise the next eligible unsplit pane is chosen by a documented stable ordering.
+- Consecutive same-direction layouts stop at three panes, while mixed orthogonal layouts can reach four panes.
+- Split requests that would exceed the allowed layout are rejected without corrupting layout state and return a clear command/protocol result.
+- Pane focus/active-pane state is tracked by Rust and survives split operations deterministically.
+- Rust owns canonical window, pane, and layout state; JS/extensions request typed split commands and never mutate layout state directly.
+- GPUI client rendering consumes server layout state and renders pane rectangles consistently with the Rust layout calculation.
+- A DWIM split command chooses the most useful split direction from current window dimensions, pane layout, and documented/configurable aspect-ratio thresholds.
+- On a wide full-screen-style window, DWIM first creates a horizontal two-pane layout, then vertically splits one horizontal pane, then vertically splits the remaining horizontal pane, then stops at four panes.
+- On a window that is wide but constrained to roughly half-screen height, DWIM prefers vertical splits, can create three vertical panes, and then stops.
+- On a window that is tall/narrow or constrained to roughly half-screen width, DWIM prefers horizontal splits, can create three horizontal panes, and then stops.
+- Manual split commands, DWIM split command, related JS APIs, and any user-tunable DWIM thresholds are registered with structured documentation metadata and discoverable through the help system.
+
+Test plan:
+
+- Add Rust unit tests for layout transitions from one pane to two horizontal panes, two vertical panes, three same-axis panes, mixed three-pane layouts, mixed four-pane layouts, and rejected over-limit splits.
+- Add Rust tests for active-pane selection, deterministic fallback to the next eligible pane, and focus preservation after splits.
+- Add Rust tests for rectangle calculation using representative window sizes, including odd dimensions and minimum-size edge cases.
+- Add DWIM tests for wide full-window dimensions, wide half-height dimensions, tall/half-width dimensions, existing same-axis layouts, existing mixed layouts, and terminal layouts.
+- Add protocol/command tests proving manual and DWIM split commands are routed through Rust command handlers and return clear success/error results.
+- Add JS API tests proving extensions can request split-window-horizontal, split-window-vertical, and split-window-dwim through typed APIs but cannot mutate layout state directly.
+- Add documentation metadata tests proving all public split commands, JS APIs, and configurable DWIM settings have descriptors.
+- Add GPUI/client rendering tests or focused layout-adapter tests proving server pane rectangles are rendered as distinct panes without client-side layout divergence.
+
+Implementation tasks:
+
+- [ ] Audit existing Rust window split primitives and identify which layout, command, protocol, and rendering pieces can be reused.
+- [ ] Define canonical Rust layout model for a client window, including `WindowLayout`, `PaneId`, active pane, split axis, pane tree/grid representation, and terminal layout states.
+- [ ] Define split invariants: maximum four panes, three-pane terminal same-axis layouts, four-pane terminal mixed layouts, deterministic active/eligible pane selection, and clear rejection behavior.
+- [ ] Implement pure Rust layout transition functions for manual horizontal and vertical splits.
+- [ ] Implement pure Rust pane rectangle calculation from window dimensions and layout state.
+- [ ] Ensure layout calculations handle odd pixel/cell dimensions deterministically.
+- [ ] Add minimum pane-size validation or a documented policy for very small windows.
+- [ ] Add Rust command variants for manual horizontal split, manual vertical split, and DWIM split.
+- [ ] Register split commands in the Rust command registry with structured metadata.
+- [ ] Route split command execution through the server-owned command path.
+- [ ] Return typed success/error results for accepted and rejected split requests.
+- [ ] Add protocol messages or extend existing scene/layout updates so clients receive pane IDs, active pane ID, rectangles, and any buffer/view association needed for rendering.
+- [ ] Update GPUI client layout/rendering code to render server-provided pane rectangles rather than independently deciding split geometry.
+- [ ] Add focus movement/activation behavior needed to choose which pane manual split commands affect.
+- [ ] Define DWIM split heuristic using current window dimensions, current layout, active pane, aspect ratio, and eligible next layouts.
+- [ ] Add configurable/documented DWIM threshold settings where user-tunable, while keeping the four-pane maximum as the phase invariant.
+- [ ] Implement DWIM in Rust so it can be called by users, keybindings, JS extensions, and future UI affordances without JavaScript on the hot path.
+- [ ] Expose typed JS APIs for `splitWindowHorizontal`, `splitWindowVertical`, and `splitWindowDwim` that submit validated Rust commands.
+- [ ] Document split commands, arguments/results, examples, JS API usage, error cases, and DWIM settings through structured descriptors.
+- [ ] Add default keybinding descriptors only if default split keybindings are introduced in this phase.
+- [ ] Ensure split state is scoped correctly for the current client/session/window model and does not assume a single global editor window beyond the current architecture.
+- [ ] Preserve performance boundaries: Rust owns layout mutation and scene generation; JS only orchestrates explicit extension calls.
+
+- [ ] Write or update tests from the test plan after implementation.
+- [ ] Validate that the tests prove each acceptance criterion is met.
+- [ ] Run formatting and the relevant/full test suite.
+
+Milestone:
+
+```text
+Users and extensions can split the active window manually or via DWIM, Rust owns and validates all pane layout state, the GPUI client renders server-provided panes, and all public split capabilities are documented and tested.
+```
 
 ## Phase 17: UI Design Command Center
 
