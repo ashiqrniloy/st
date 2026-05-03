@@ -18,9 +18,9 @@ GPUI input
   -> GPUI prepaint/paint
 ```
 
-This document records the discussed alternative model: make the GPUI client responsible for immediate primitive text editing, while the server follows via edit transactions and remains responsible for commands, persistence, extensions, semantic services, and asynchronous intelligence features.
+This document records the chosen high-level model: make the GPUI client responsible for immediate primitive text editing, while the server follows via edit transactions and remains responsible for commands, persistence, extensions, semantic services, and asynchronous intelligence features.
 
-This is intentionally not yet a final decision. There are architectural choices still to make.
+Most core architectural decisions are now locked in this document. Remaining concerns are implementation details and policy choices called out in the review section near the end.
 
 ---
 
@@ -224,128 +224,186 @@ This is important for:
 
 ---
 
-# Possible Authority Models
+# Chosen Authority Model
 
-The main unresolved question is: who owns canonical buffer state?
-
-## Option A: Focused Client Owns Live Buffer; Server Follows
-
-The focused client applies primitive edits immediately and is the live authority for those edits. The server follows by applying transaction messages.
-
-### Pros
-
-- Best typing latency.
-- Simple visible editing path.
-- Avoids speculative local echo semantics for primitive edits.
-
-### Cons
-
-- Server is eventually consistent, not immediately canonical.
-- Save/server commands must account for pending client transactions.
-- Multi-client editing needs a clear conflict policy.
-
-## Option B: Server Remains Canonical; Client Speculates
-
-The client locally displays edits before confirmation, but the server remains the immediate authority and can accept/reject/reorder edits.
-
-### Pros
-
-- Preserves strongest server-canonical architecture.
-- Multi-client/server command ordering is clearer.
-
-### Cons
-
-- This is local echo/reconciliation, which we do not currently prefer.
-- Requires pending-edit queues, double-apply prevention, rejection handling, and more complex IME/undo behavior.
-
-## Option C: Single-Writer Lease / Edit Leadership
-
-A middle-ground model. For each buffer/session, one client has edit leadership/write lease. That client may apply primitive edits locally. The server orders and records transactions, and other clients follow server-broadcast updates.
+The chosen authority model is:
 
 ```text
-one focused client has edit leadership for a buffer
-that client may apply primitive edits locally
-server receives and orders transactions
-other clients receive server-broadcast transactions
-leadership can transfer between clients
+Focused Normal-mode client owns primitive edits for the file.
+Server follows by processing edit transactions.
+Server does not need to be strictly canonical for immediate text edits.
+Only one client can have edit ownership for a file at a time.
+Other clients viewing the same file are Read-mode followers.
 ```
 
-### Pros
+This intentionally rejects the local-echo/reconciliation model where every primitive edit remains server-authoritative and the client merely speculates. Instead, primitive editing is a legitimate client-native path in Normal mode.
 
-- Keeps local typing fast.
-- Avoids unconstrained multi-writer conflicts.
-- Gives the server a clear ordering role.
-- Easier than full collaborative editing/CRDT/OT.
+## Normal Mode
 
-### Cons
+Normal mode means the client has edit leadership for a file.
 
-- Requires lease/leadership protocol.
-- Requires transfer/revocation behavior.
-- Server may still be briefly behind the leader client.
+```text
+Normal-mode client
+  applies primitive edits locally
+  renders immediately
+  emits text/selection transactions to server
+  receives async semantic/decorative/server-command results
+```
 
-This may be the best initial model if multi-client support matters.
+Only one client may be in Normal mode for a given source file.
+
+## Read Mode
+
+Read mode means the client does not own edit leadership for that file.
+
+```text
+Read-mode client
+  does not apply primitive edits directly
+  routes input through server/config command path
+  receives incremental updates from the Normal-mode owner/server stream
+```
+
+Read mode is also the default for additional clients that open a file already owned by another Normal-mode client.
+
+## Edit Leadership / Single Writer
+
+`st` does not intend to support collaborative multi-client simultaneous editing of one file. Therefore, the single-writer model is not a temporary compromise; it is the intended ownership model.
+
+Rules:
+
+- A file may have zero or one Normal-mode owner.
+- A file may have any number of Read-mode viewers/followers.
+- If no client owns Normal mode for a file, a client may request Normal mode.
+- If a client owns Normal mode for a file, new clients open that file in Read mode.
+- Ownership transfer should be explicit and conservative.
+- Read-mode clients receive incremental updates and server-side results but do not locally mutate file text.
+
+## Why This Model
+
+Benefits:
+
+- Best typing latency for the editing client.
+- Avoids speculative local echo complexity.
+- Avoids CRDT/OT/collaborative editing complexity.
+- Preserves a strong server role as processor, persistence coordinator, semantic service host, extension host, and transaction receiver.
+- Makes user-visible mode state meaningful and useful for future modal editing/keybinding design.
+
+Tradeoffs:
+
+- Server may briefly lag behind the Normal-mode client.
+- Save and server-side commands must account for transaction ordering.
+- Read-mode behavior and ownership transfer need explicit UX/protocol design.
+- Undo/redo grouping/interleaving policies still need detailed design.
 
 ---
 
 # Potential Issues And Design Risks
 
-## 1. Multi-Client Editing
+## 1. Edit Leadership And Read-Mode UX
 
-If two clients edit the same buffer, direct client editing creates conflicts unless there is a policy.
+The main multi-client concern is not collaborative editing; it is clear single-writer ownership.
 
-Simplest initial rule:
+Risk:
 
 ```text
-Only one client has write leadership for a buffer at a time.
-Other clients are read-only/following unless leadership transfers.
+A user may be confused why one client can edit while another is read-only.
 ```
 
-Full collaborative editing should be treated as a future feature, not the initial solution.
+Required design:
 
-## 2. Keymap Knowledge In The Client
+- Show whether the current buffer/client is in Normal mode or Read mode.
+- Show which client/session owns Normal mode when a file is read-only because another client owns it.
+- Provide a command to request Normal mode.
+- Define explicit ownership transfer behavior.
+- Ensure a Read-mode client never applies primitive edits locally.
 
-The client needs enough keymap/routing knowledge to decide whether input is direct or server-routed.
+## 2. Keymap And Routing Knowledge In The Client
 
-The client should not run TypeScript config on every keypress. Instead:
+The client needs enough routing knowledge to decide whether input is client-native or server-routed.
+
+Risk:
+
+```text
+If the client runs dynamic config/TypeScript on the input hot path, typing performance regresses.
+```
+
+Required design:
 
 ```text
 TypeScript/Rust config layer builds authoritative keymap/routing state
-server sends compiled routing table to client
-client performs fast routing decisions locally
+server compiles a client-safe routing snapshot
+client performs fast routing decisions locally from that snapshot
 ```
 
-## 3. Printable Keys Can Be Commands
+The client must not execute TypeScript or perform slow dynamic lookup during input handling.
 
-Emacs-like editors can bind printable keys to commands. If all printable keys can be intercepted by default, typing may become slow or ambiguous.
+## 3. Hot Reload Of Keymaps And Routing
 
-Recommended default:
+Config should be hot-reloadable, but hot reload must not compromise input performance or leave the client in a partially updated state.
+
+Required design:
+
+- Server watches/reloads config or handles manual reload.
+- Server validates config and builds a new generation.
+- Server sends a full compiled config/routing snapshot to clients.
+- Client atomically swaps the snapshot.
+- Failed reload keeps the last-known-good config active.
+- In-progress prefix chords are canceled or safely handled across generation changes.
+
+## 4. Printable Keys Can Be Commands
+
+The default should optimize for normal typing:
 
 ```text
-unmodified printable text -> direct client edit
-explicit mode/config intercepts -> server-routed
-modified/prefix chords -> server-routed by default
+Normal mode: common typing/edit/navigation keys -> client-native
+Read mode: input routes through server/config command path
+Mode overrides: explicit printable interceptors may route to server
 ```
 
-## 4. Prefix Keymaps
+Risk:
 
-Prefix keys such as `ctrl+x` need client-side routing awareness.
+```text
+If broad printable categories route through the server, typing latency can return.
+```
 
-Recommended:
+Required design:
 
-- modifier/prefix chords are routable by default,
-- printable-prefix interception requires explicit mode/config opt-in.
+- Default key routing is represented in configuration, not hard-coded.
+- Users/modes can override individual keys or categories.
+- Documentation warns that routing printable/common typing keys through the server can degrade performance.
+- Runtime diagnostics may warn when a mode routes broad printable categories through the server.
 
-## 5. Undo/Redo
+## 5. Prefix Keymaps
 
-If primitive edits are client-native, the undo stack must be transaction-based and consistent with server-side mutations.
+Prefix keys such as `ctrl+x` require client-side routing awareness.
 
-Both client edits and server commands should produce the same transaction shape.
+Required design:
 
-Undo grouping should be represented explicitly in transactions.
+- Compiled routing table includes prefix information.
+- Modifier/prefix chords route according to config.
+- Printable prefix interception is explicit and mode/config controlled.
+- If config generation changes mid-prefix, initial behavior should cancel the prefix sequence.
 
-## 6. Server-Side Features Lag Behind Text
+## 6. Undo/Redo
 
-This is acceptable for many features:
+Undo/redo remains an important unresolved design choice.
+
+Risk:
+
+```text
+Client-owned primitive edits and server-generated edits can produce inconsistent undo behavior unless both use a shared transaction model.
+```
+
+Required design:
+
+- All text mutations use a common transaction format.
+- Undo grouping is explicit.
+- Server-generated text edits can enter the same history model as client-native edits.
+- Final decision needed: client-owned undo, server-owned undo, or shared transaction log.
+
+## 7. Server-Side Features Lag Behind Text
+
+This is acceptable and expected for many features:
 
 - syntax highlighting,
 - autocomplete,
@@ -353,50 +411,78 @@ This is acceptable for many features:
 - semantic overlays,
 - LaTeX rendering/transformation previews.
 
-But all async results must be versioned:
+Risk:
 
 ```text
-result includes buffer_id + buffer_version/request metadata
+Async server results may refer to stale text.
+```
+
+Required design:
+
+```text
+result includes request id and/or buffer version/transaction metadata
 client applies only if still current
 stale results are discarded
 ```
 
-## 7. Save And Commands Requiring Fresh Text
+The selected strategy is request id + buffer version + cancellation/supersession with complete snapshots per scope.
 
-If the server follows asynchronously, server-side commands that require current text must flush or wait for pending client transactions first.
+## 8. Save And Commands Requiring Fresh Text
+
+Because the server follows asynchronously, save and some server-side commands must not run against stale text.
+
+Save decision:
+
+```text
+Save is requested by the client.
+Save request includes latest client transaction id/version.
+Server applies all transactions through that id/version before writing file.
+```
+
+Other commands may also require fresh server buffer state, especially commands that read current buffer text.
 
 Examples:
 
-- save,
 - format,
-- compile,
 - LSP request,
-- extension command that reads buffer text,
-- search/index operations that require current contents.
+- compile/build current buffer,
+- extension command that reads current buffer content,
+- search/index operation requiring latest edits.
 
-Possible rule:
+Required design:
 
-```text
-Before commands requiring fresh buffer state, client flushes pending transactions and server applies through latest known version, then command executes.
-```
+- Commands that require current text should declare `requires_fresh_buffer`.
+- Before executing such commands, server must apply transactions through the request's specified transaction id/version.
 
-Commands may need metadata such as:
+## 9. Extension Hooks Must Not Become Synchronous Per Character
 
-```text
-requires_fresh_buffer: true
-```
+Extensions should not be able to accidentally put JavaScript or slow server work back into the normal typing path.
 
-## 8. Extension Hooks Must Not Become Synchronous Per Character
-
-Extensions should not be able to accidentally place JavaScript or slow server work back into the normal typing path.
-
-Recommended:
+Required design:
 
 ```text
 default: extensions observe async versioned edit stream
 optional: modes/config may register explicit input interceptors
 interceptors are opt-in and documented as latency-affecting
 ```
+
+## 10. Transaction Ordering And Backpressure
+
+The server follows Normal-mode client edits by receiving transactions.
+
+Risks:
+
+- transaction messages could lag behind rapid local editing,
+- save could arrive before earlier edit transactions are applied,
+- a slow server could accumulate stale work.
+
+Required design:
+
+- Transactions are monotonically numbered per client/file.
+- Save and fresh-buffer commands include the required transaction id/version.
+- Server applies transactions in order.
+- Server detects missing transactions and requests resync if necessary.
+- Queues remain bounded/monitored.
 
 ---
 
@@ -845,113 +931,26 @@ mode routes text.alpha/text.number/text.punctuation/text.whitespace to server
 - [ ] Add tests: new client receives latest generation.
 - [ ] Add tests: prefix chord is canceled or handled safely across generation change.
 
-## 9. Text Mutation Transaction Format Options
+## 9. Text Mutation Transaction Format
 
-A final transaction format still needs to be selected. The format should optimize for correctness, compactness, and fast application.
+Decision:
 
-### Option A: Absolute byte-range transaction
-
-```rust
-struct TextEditTransaction {
-    transaction_id: u64,
-    buffer_id: u64,
-    base_version: u64,
-    new_version: u64,
-    source_client_id: ClientId,
-    edits: Vec<ByteRangeEdit>,
-    selection_before: Selection,
-    selection_after: Selection,
-    undo_group: UndoGroupId,
-}
-
-struct ByteRangeEdit {
-    start_byte: u64,
-    end_byte: u64,
-    replacement: String,
-}
+```text
+Text mutation transactions are char-range authoritative everywhere.
+Do not include byte hints or line/column hints in the core transaction format.
+Keep the transaction payload light and canonical.
 ```
 
-Pros:
+Rationale:
 
-- Fast for Rust string/rope mutation when byte offsets are already known.
-- Compact.
-- Avoids repeated char-to-byte conversion on the server.
+- The server/editor model naturally uses char indices.
+- A single canonical coordinate system keeps the protocol simpler.
+- Byte-range transactions introduce UTF-8 boundary hazards.
+- Server-to-client byte conversion would be unnecessary if the client already maintains char/byte metadata.
+- The client must maintain efficient char/byte/UTF-16 metadata anyway for GPUI input, cursor placement, selection, and rendering.
+- Therefore, optimize client metadata instead of adding extra coordinate hints to the protocol.
 
-Cons:
-
-- Requires strict UTF-8 boundary guarantees.
-- Less convenient for protocol/debugging than line/column or char offsets.
-- Offset validity depends on exact base version.
-
-### Option B: Absolute char-range transaction
-
-```rust
-struct TextEditTransaction {
-    transaction_id: u64,
-    buffer_id: u64,
-    base_version: u64,
-    new_version: u64,
-    source_client_id: ClientId,
-    edits: Vec<CharRangeEdit>,
-    selection_before: Selection,
-    selection_after: Selection,
-    undo_group: UndoGroupId,
-}
-
-struct CharRangeEdit {
-    start_char: u64,
-    end_char: u64,
-    replacement: String,
-}
-```
-
-Pros:
-
-- Aligns with current server/editor char-index model.
-- Easier to reason about Unicode scalar positions than bytes.
-- Good fit for rope APIs that operate on char indices.
-
-Cons:
-
-- Client/server may need char/byte conversion metadata.
-- Long-line char conversion must be optimized by Phase 4.
-- UTF-16 GPUI offsets still need separate conversion.
-
-### Option C: Line/column transaction
-
-```rust
-struct TextEditTransaction {
-    transaction_id: u64,
-    buffer_id: u64,
-    base_version: u64,
-    new_version: u64,
-    source_client_id: ClientId,
-    edits: Vec<LineColumnEdit>,
-    selection_before: Selection,
-    selection_after: Selection,
-    undo_group: UndoGroupId,
-}
-
-struct LineColumnEdit {
-    start: LineColumn,
-    end: LineColumn,
-    replacement: String,
-}
-```
-
-Pros:
-
-- Human-readable and debug-friendly.
-- Good for diagnostics/logging.
-- Natural for editor UI concepts.
-
-Cons:
-
-- More expensive to apply unless line metadata is excellent.
-- Ambiguous around tabs/columns unless columns are clearly byte/char/UTF-16 based.
-- Less compact.
-
-### Option D: Hybrid transaction with primary byte range plus debug positions
+Canonical transaction shape:
 
 ```rust
 struct TextEditTransaction {
@@ -967,89 +966,128 @@ struct TextEditTransaction {
 }
 
 struct TextEdit {
-    start_byte: u64,
-    end_byte: u64,
-    start_char: Option<u64>,
-    end_char: Option<u64>,
-    start_line_col: Option<LineColumn>,
-    end_line_col: Option<LineColumn>,
+    start_char: u64,
+    end_char: u64,
     replacement: String,
 }
 ```
 
-Pros:
+Rules:
 
-- Fast primary application via byte range.
-- Optional char/line positions improve debugging and validation.
-- Can validate client metadata during development/profiling.
+- `start_char..end_char` is authoritative for every text mutation.
+- Client-to-server primitive edit transactions use this format.
+- Server-to-client follower updates use this format.
+- Server-generated text edits use this format.
+- Undo/redo transactions use this format.
+- Extension-observed text edits use this format unless a future low-level API explicitly requires another representation.
 
-Cons:
-
-- Larger payload.
-- More fields and invariants.
-- Risk of inconsistent metadata if not carefully validated.
-
-Recommendation to choose from:
+Client performance requirement:
 
 ```text
-Option B if we want consistency with current rope/editor char-index design.
-Option D if we want maximum performance with validation/debug metadata.
+The client must maintain line/chunk metadata so char-range application does not require whole-content scanning.
 ```
 
-## 10. Undo/Redo Ownership Options
+Required client metadata concept:
 
-Final ownership still needs to be selected.
+```rust
+struct VisibleLine {
+    start_char: u64,
+    start_byte: u64,
+    start_utf16: u64,
+    char_len: u32,
+    byte_len: u32,
+    utf16_len: u32,
+    chunks: Vec<VisibleChunk>,
+}
 
-### Option A: Client-owned undo/redo
+struct VisibleChunk {
+    start_char: u64,
+    start_byte: u64,
+    start_utf16: u64,
+    char_len: u32,
+    byte_len: u32,
+    utf16_len: u32,
+}
+```
 
-Pros:
-
-- Fastest interactive undo/redo.
-- Matches client-owned primitive editing.
-- UI can group typing edits without server round trips.
-
-Cons:
-
-- Server commands that mutate text must be inserted into client undo history.
-- Read-mode/follower clients need server-provided history or no undo.
-- Persistence/debugging of undo history is harder.
-
-### Option B: Server-owned undo/redo
-
-Pros:
-
-- One authoritative undo history.
-- Server commands and extension edits are naturally included.
-- Easier to serialize, inspect, and expose to extensions.
-
-Cons:
-
-- Undo/redo becomes server-routed and may have latency.
-- Conflicts with client-owned immediate primitive edit philosophy.
-- Client must wait for server to apply undo result.
-
-### Option C: Shared transaction log, client executes local undo for owned transactions
-
-Pros:
-
-- One transaction log format for client and server.
-- Client can undo local typing immediately in Normal mode.
-- Server can process/record the same undo transaction.
-- Server-generated edits can be inserted into the shared log.
-
-Cons:
-
-- Most complex design.
-- Requires careful undo grouping and source tracking.
-- Requires clear rules when server-generated edits interleave with client edits.
-
-Recommendation to choose from:
+Application flow on the client:
 
 ```text
-Option C is architecturally strongest.
-Option A is simplest/fastest initially.
-Option B is simplest for server consistency but worst for typing responsiveness.
+receive TextEdit { start_char, end_char, replacement }
+  -> locate line/chunk by char metadata
+  -> convert char range to local byte range inside bounded chunk
+  -> apply replacement to client text model
+  -> update line/chunk metadata incrementally
+  -> mark affected lines/chunks dirty
 ```
+
+GPUI input flow on the Normal-mode client:
+
+```text
+GPUI UTF-16 range
+  -> locate line/chunk by UTF-16 metadata
+  -> convert to local byte range for immediate edit
+  -> derive char range from metadata
+  -> emit TextEditTransaction with start_char/end_char
+```
+
+Performance rule:
+
+```text
+Naive whole-string char-to-byte scans are not acceptable in the hot path.
+Char-to-byte and UTF-16-to-byte conversions must be line/chunk-metadata based.
+```
+
+## 10. Undo/Redo Ownership
+
+Decision:
+
+```text
+Use a shared transaction log.
+The Normal-mode owning client may execute undo/redo locally for transactions it owns.
+The server processes/records the same undo/redo transaction in the shared log.
+```
+
+Rationale:
+
+- Preserves fast interactive undo/redo for the editing client.
+- Keeps one transaction model for client-native edits, server-generated edits, undo, and redo.
+- Allows the server to inspect/process/persist the same transaction history.
+- Allows Read-mode followers to receive undo/redo as ordinary transaction updates.
+- Avoids making every undo/redo wait for server round trip.
+
+Conceptual model:
+
+```text
+Normal-mode client owns primitive edits
+  -> appends local transaction to local transaction log
+  -> sends transaction to server
+  -> server appends/processes transaction in shared log
+
+Normal-mode client invokes undo for owned local group
+  -> computes inverse transaction locally
+  -> applies inverse immediately
+  -> sends undo transaction to server
+  -> server appends/processes undo transaction
+  -> Read-mode clients receive the undo transaction as an update
+```
+
+Transaction requirements:
+
+- Every text mutation is represented as a transaction.
+- Undo/redo operations are also represented as transactions.
+- Transactions include source information.
+- Transactions include undo-group identity.
+- Transactions include selection/cursor before and after where relevant.
+- Server-generated edits enter the same transaction stream.
+- Read-mode clients apply transactions from the shared stream and do not independently perform local undo.
+
+Open implementation details:
+
+- Exact undo group coalescing rules for typing bursts.
+- How server-generated edits interleave with client-owned undo groups.
+- Whether server-generated edits are undoable by the Normal-mode client by default.
+- How to expose transaction history to extensions safely.
 
 ## 11. Save Semantics
 
@@ -1114,104 +1152,591 @@ struct CommandDescriptor {
 }
 ```
 
-## 13. Async Semantic Result Versioning Options
+## 13. Async Semantic Result Versioning
 
-A final stale-result strategy still needs to be selected.
-
-### Option A: Buffer version tagging
-
-Every async result includes:
-
-```rust
-buffer_id
-buffer_version
-```
-
-Client applies only if the current buffer version matches.
-
-Pros:
-
-- Simple.
-- Good for syntax highlighting, diagnostics, decorations.
-- Easy to test.
-
-Cons:
-
-- Results are discarded after any later edit, even if the result still partially applies.
-- Can waste work during rapid typing.
-
-### Option B: Transaction range/version tagging
-
-Every async result includes:
-
-```rust
-buffer_id
-base_version
-observed_transaction_range
-affected_ranges
-```
-
-Client can apply if affected ranges are still valid or can be mapped forward.
-
-Pros:
-
-- More results can survive unrelated edits.
-- Better for large files and expensive analyses.
-
-Cons:
-
-- Requires range mapping through transactions.
-- More complex correctness model.
-
-### Option C: Request id + buffer version + cancellation
-
-Every async request has:
-
-```rust
-request_id
-buffer_id
-buffer_version
-kind
-```
-
-Newer requests cancel older requests of the same kind/scope. Client applies only latest matching result.
-
-Pros:
-
-- Practical for autocomplete, syntax passes, diagnostics, LaTeX previews.
-- Avoids applying stale work.
-- Bounded background waste if cancellation is real.
-
-Cons:
-
-- Coarser than range mapping.
-- Some useful partial results may be discarded.
-
-### Option D: Hybrid
-
-Use:
+Decision:
 
 ```text
-request_id + buffer_version + cancellation by default
-range mapping only for specific expensive features that need it
+Use request id + buffer version + cancellation/supersession.
+Latest request wins per semantic feature/scope.
+Semantic results should be complete snapshots for their scope, not fragile deltas.
+The client keeps the last valid semantic state until a newer valid snapshot replaces it.
 ```
 
-Pros:
+This applies to async features that should never block the typing hot path, including:
 
-- Simple default.
-- Allows sophistication where justified.
-- Good performance/correctness tradeoff.
+- syntax highlighting,
+- diagnostics,
+- autocomplete,
+- semantic tokens,
+- LaTeX previews,
+- inline hints,
+- code lenses,
+- AI suggestions,
+- async search/index results,
+- extension-provided semantic/decorative results.
 
-Cons:
+## 13.1 Core Problem
 
-- Two systems to maintain if range mapping is added later.
+The Normal-mode client changes text immediately. The server or a background worker may compute semantic information from an older text version. By the time the result is ready, the buffer may have changed.
 
-Recommendation to choose from:
+Example:
 
 ```text
-Option C for initial implementation.
-Option D as the long-term direction.
+version 100: user typed "\\alp"
+server starts autocomplete/highlight request 55 for version 100
+
+version 101: user types "h"
+version 102: user types "a"
+
+request 55 returns for version 100
+current client text is version 102
 ```
+
+The client must not apply stale information that no longer matches the visible text.
+
+## 13.2 Request Metadata
+
+Every async semantic request should include metadata like:
+
+```rust
+struct SemanticRequestMeta {
+    request_id: u64,
+    buffer_id: u64,
+    buffer_version: u64,
+    transaction_id: u64,
+    kind: SemanticKind,
+    scope: SemanticScope,
+    supersedes: Option<RequestId>,
+}
+```
+
+The important identity is:
+
+```text
+(buffer_id, kind, scope)
+```
+
+Examples:
+
+```text
+(buffer 1, SyntaxHighlight, visible lines 0..80)
+(buffer 1, Diagnostics, whole buffer)
+(buffer 1, Autocomplete, cursor/request scope)
+(buffer 1, LatexPreview, math block scope)
+```
+
+## 13.3 Latest-Request-Wins Rule
+
+For each `(buffer_id, kind, scope)`, only the latest request matters.
+
+Server maintains:
+
+```rust
+latest_request_by_scope: HashMap<SemanticScopeKey, RequestId>
+```
+
+When a new request is scheduled:
+
+```text
+request 56 supersedes request 55
+request 55 cancellation token is set
+latest_request_by_scope[key] = 56
+```
+
+When a result returns on the server:
+
+```text
+if result.request_id != latest_request_by_scope[key]:
+    discard
+else:
+    send to client
+```
+
+The client also validates defensively:
+
+```text
+if result.request_id is older than latest known request for scope:
+    discard
+if result.buffer_version is incompatible with current buffer version:
+    discard
+otherwise:
+    apply atomically for that scope
+```
+
+## 13.4 Snapshot Results Per Scope
+
+Initial semantic results should be scope snapshots, not patch streams.
+
+Good:
+
+```text
+SyntaxHighlightResult for visible lines 0..80 replaces all syntax highlighting for lines 0..80.
+DiagnosticsResult for whole buffer replaces diagnostics for that diagnostic source.
+LatexPreviewResult for math block replaces preview for that block.
+```
+
+Avoid initially:
+
+```text
+add highlight A
+remove highlight B
+modify highlight C
+```
+
+Reason:
+
+```text
+If request 55 is canceled and request 56 completes, request 56 must contain everything the client needs for its scope.
+Canceled intermediate requests must not leave holes.
+```
+
+This is the carry-forward rule:
+
+```text
+The client keeps the last valid semantic state.
+The server sends a complete replacement snapshot for the next valid state.
+Canceled intermediate results do not clear anything and do not need to be replayed.
+```
+
+## 13.5 Client Semantic State
+
+The client maintains semantic state per scope:
+
+```rust
+struct SemanticClientState {
+    latest_request_by_scope: HashMap<SemanticScopeKey, RequestId>,
+    applied_generation_by_scope: HashMap<SemanticScopeKey, RequestId>,
+    pending_results: HashMap<SemanticScopeKey, VecDeque<SemanticResult>>,
+}
+```
+
+Queues should be bounded. For most semantic scopes, capacity can be `1`:
+
+```text
+for the same buffer/kind/scope:
+  keep newest pending result
+  drop older pending result
+```
+
+Client application rule:
+
+```text
+result arrives
+  -> if stale request id, drop
+  -> if stale/incompatible buffer version, drop
+  -> if newer than applied generation, replace semantic state for that scope
+```
+
+Text transactions are sequential and must not be skipped. Semantic results are not text transactions. Because semantic results are snapshots by scope, they do not require replaying every older semantic result.
+
+## 13.6 Server Cancellation, Debounce, And Coalescing
+
+The server should not schedule expensive semantic work directly on every keystroke without control.
+
+Use debounce/coalescing per kind/scope:
+
+```text
+text changes
+  -> mark semantic scope dirty
+  -> debounce/coalesce briefly
+  -> schedule latest request for that scope
+```
+
+Example debounce policies:
+
+```text
+syntax visible range: 8-16ms or next frame-ish
+autocomplete: 30-80ms
+diagnostics: 150-500ms
+LaTeX preview: 100-300ms
+```
+
+When a newer request supersedes an older one:
+
+```text
+cancel old token
+drop queued unsent old request
+ensure new request is a complete snapshot for its scope
+```
+
+Server queues must be bounded. On overflow:
+
+```text
+drop/coalesce older pending work for the same scope
+keep newest request
+never let semantic work compete with typing/editor hot path
+```
+
+## 13.7 Dirty Scopes
+
+Semantic work should be scheduled by dirty scope, not always by whole file.
+
+Examples:
+
+```text
+user types in visible line 20
+  -> schedule syntax highlight for visible range / affected visible region
+  -> schedule autocomplete if relevant at cursor
+  -> schedule diagnostics after longer debounce for whole buffer
+  -> schedule LaTeX preview only if a math block is affected
+```
+
+Each result is still a complete snapshot for its chosen scope.
+
+## 13.8 Version Compatibility Rule
+
+Initial strict rule:
+
+```text
+Apply semantic result only if result.buffer_version == client.current_buffer_version for that scope's text state.
+```
+
+If stale:
+
+```text
+do not apply stale result
+do not clear existing semantic state
+keep previous valid highlights/diagnostics/previews visible until a newer valid result arrives
+```
+
+This prevents flicker and avoids semantic holes while maintaining correctness.
+
+## 13.9 Example Sequence
+
+```text
+version 100
+request 55 syntax visible lines 0..60 scheduled
+
+user types -> version 101
+request 56 syntax visible lines 0..60 scheduled
+request 55 canceled
+
+request 55 completes anyway
+server sees latest request is 56 -> discard
+
+client still displays last valid syntax from request 54
+
+request 56 completes
+server sends full syntax snapshot for lines 0..60 at version 101
+
+client checks:
+  request 56 is latest
+  version 101 == current
+then replaces syntax for lines 0..60
+```
+
+No hole, no flicker from cancellation, no stale replay, and no need to apply request 55.
+
+## 13.10 Patch-Based Semantic Results Are Deferred
+
+Some future semantic features may want patch-based updates. If introduced, they must carry semantic generation metadata:
+
+```rust
+struct SemanticPatchMeta {
+    base_semantic_generation: u64,
+    new_semantic_generation: u64,
+    request_id: u64,
+    buffer_id: u64,
+    buffer_version: u64,
+    kind: SemanticKind,
+    scope: SemanticScope,
+}
+```
+
+Client may apply a semantic patch only if:
+
+```text
+client.applied_generation_for_scope == base_semantic_generation
+```
+
+If not, request or wait for a full snapshot.
+
+Initial rule:
+
+```text
+Do not use patch-based semantic results initially.
+Use complete snapshots per scope.
+```
+
+## 13.11 Responsibilities
+
+Server responsibilities:
+
+- Maintain latest request id per `(buffer, kind, scope)`.
+- Cancel superseded requests.
+- Coalesce/debounce semantic work.
+- Keep semantic work queues bounded.
+- Send only latest valid results.
+- Make initial results complete snapshots for their scope.
+- Never require a canceled result to have been applied.
+- Include request/version metadata on every result.
+
+Client responsibilities:
+
+- Maintain current buffer version/transaction id.
+- Maintain latest known/applied request id per semantic scope.
+- Drop stale results.
+- Keep last valid semantic state until replaced.
+- Apply semantic snapshots atomically per scope.
+- Bound pending semantic result queues.
+- Never let semantic result application block typing/render hot path.
+
+# Remaining Concerns And Pending Decisions For Review
+
+This section summarizes what still needs decisions or deeper design after reviewing the full model.
+
+## A. Normal/Read Mode UX And Ownership Transfer
+
+Core decision is locked:
+
+```text
+one Normal-mode owner per file
+other clients are Read-mode followers
+```
+
+Still pending:
+
+- [ ] Exact command names for requesting/releasing Normal mode.
+- [ ] Whether a Read-mode client can request ownership while another client owns Normal mode.
+- [ ] Whether ownership transfer requires confirmation from the current owner.
+- [ ] What happens if the Normal-mode client disconnects, crashes, or becomes unresponsive.
+- [ ] How the UI displays Normal mode vs Read mode.
+- [ ] How the UI displays which client/session owns Normal mode.
+- [ ] Whether Read mode is purely read-only or can still execute non-mutating commands locally/server-side.
+
+Suggested initial policy:
+
+```text
+Ownership transfer is explicit and conservative.
+If the owner disconnects cleanly, ownership becomes available.
+If the owner disappears unexpectedly, server marks ownership stale and allows a new client to acquire after validating latest transaction state or resyncing from disk/server state.
+```
+
+## B. Transaction Ordering, Acknowledgement, And Resync
+
+Core decision is locked:
+
+```text
+Normal-mode client applies primitive edits locally and sends ordered transactions to server.
+Server processes transactions in order.
+```
+
+Still pending:
+
+- [ ] Exact transaction id scheme: per client/file, per buffer, or global server sequence.
+- [ ] Whether server sends acknowledgements for every transaction or coalesced acknowledgements.
+- [ ] What client does if server detects a missing transaction.
+- [ ] What server does if it receives out-of-order transactions.
+- [ ] What resync protocol is used if transaction logs diverge.
+- [ ] How much pending transaction history the client retains for resend/resync.
+- [ ] How much applied transaction history the server retains for followers/semantic versioning.
+
+Suggested initial policy:
+
+```text
+Use monotonically increasing per-buffer transaction ids from the Normal-mode owner.
+Server applies in order and sends latest_applied_transaction acknowledgements.
+If a gap or mismatch is detected, server requests resync from the owner or falls back to a full buffer snapshot.
+```
+
+## C. Transaction Format Details
+
+Core decision is locked:
+
+```text
+Text edits are char-range authoritative and carry no byte/line hints.
+```
+
+Still pending:
+
+- [ ] Exact `Selection` representation in transactions.
+- [ ] Whether selections are char ranges, anchor/head pairs, or richer multi-cursor structures.
+- [ ] Whether transactions can contain multiple edits and how overlapping edits are ordered/validated.
+- [ ] Whether replacement text in multi-edit transactions is applied in ascending or descending range order.
+- [ ] How transaction inversion is represented for undo/redo.
+- [ ] Whether non-text state changes, such as mode changes or cursor-only moves, are transactions or separate events.
+
+Suggested initial policy:
+
+```text
+Start with single-cursor/single-selection transactions but design structs to allow multi-cursor later.
+Multi-edit transactions must declare deterministic ordering and reject overlapping ranges unless explicitly supported.
+```
+
+## D. Undo/Redo Detailed Policy
+
+Core decision is locked:
+
+```text
+Use shared transaction log.
+Normal-mode owner may execute local undo/redo for owned transactions.
+Server records/processes the same undo/redo transaction.
+```
+
+Still pending:
+
+- [ ] Typing coalescing rules: time-based, boundary-based, command-based, or all three.
+- [ ] Whether server-generated edits are undoable by the Normal-mode client by default.
+- [ ] How server-generated edits interleave with local typing undo groups.
+- [ ] Whether undo stops at server-generated edits or can undo across them.
+- [ ] Whether Read-mode clients can request undo or only observe undo transactions.
+- [ ] How transaction history is exposed to extensions without allowing unsafe mutation.
+
+Suggested initial policy:
+
+```text
+Coalesce contiguous typing into undo groups until cursor jump, selection change, command boundary, mode change, or timeout.
+Server-generated edits create explicit undo boundaries until a more advanced policy is designed.
+Read-mode clients do not perform undo directly.
+```
+
+## E. Compiled Routing Table Details
+
+Core decision is locked:
+
+```text
+Server/config runtime is authoritative.
+Client receives versioned compiled routing snapshots.
+Client never runs TypeScript on input hot path.
+```
+
+Still pending:
+
+- [ ] Exact normalized key representation.
+- [ ] Exact key category taxonomy and QWERTY/default key list.
+- [ ] How keyboard layouts beyond QWERTY are represented.
+- [ ] How numpad keys are normalized.
+- [ ] How IME/composition input bypasses or participates in routing.
+- [ ] Whether mouse events are in the same routing table or a separate input policy table.
+- [ ] How mode-specific routing inheritance works.
+- [ ] How route conflicts are diagnosed.
+
+Suggested initial policy:
+
+```text
+Define a normalized physical/logical key model explicitly.
+Keep default Normal/Read routing in typed built-in config descriptors.
+Emit diagnostics for ambiguous routes and for broad printable server-routing.
+```
+
+## F. Config Hot Reload Policy
+
+Core decision is locked:
+
+```text
+Hot reload produces a new compiled config generation.
+Client atomically swaps snapshots.
+Failed reload keeps last-known-good config.
+```
+
+Still pending:
+
+- [ ] Manual reload command name and behavior.
+- [ ] File watcher debounce duration.
+- [ ] Whether auto reload is enabled by default.
+- [ ] How config errors are shown in UI.
+- [ ] Whether reload can change active Normal/Read ownership.
+- [ ] Whether reload can remove current mode and how fallback is displayed.
+- [ ] Whether config generation changes cancel all prefix states or only affected ones.
+
+Suggested initial policy:
+
+```text
+Provide manual reload first, then add auto reload with debounce.
+Cancel in-progress prefix chords on any config generation change.
+Show reload errors without changing active config.
+```
+
+## G. Semantic Result Scope Definitions
+
+Core decision is locked:
+
+```text
+Async semantic results use latest-request-wins, cancellation/supersession, and full snapshots per scope.
+```
+
+Still pending:
+
+- [ ] Exact `SemanticScope` variants.
+- [ ] Scope granularity for syntax highlighting: visible range, line range, whole buffer, or parser region.
+- [ ] Scope granularity for diagnostics: whole buffer vs source-specific sets.
+- [ ] Scope identity for LaTeX previews: char range, stable block id, or discovered region id.
+- [ ] How semantic state is cleared when a scope disappears.
+- [ ] Whether strict exact buffer-version matching is too strict for some scopes after initial implementation.
+- [ ] Default debounce values per semantic kind.
+
+Suggested initial policy:
+
+```text
+Start with conservative scopes: visible line range for syntax, whole-buffer per diagnostic source, cursor scope for autocomplete, and math-block scope for LaTeX preview.
+Use exact version matching initially.
+```
+
+## H. Save And Fresh-Buffer Command Semantics
+
+Core decision is locked:
+
+```text
+Save request includes latest transaction id/version.
+Server applies through that point before saving.
+Commands that require current text declare requires_fresh_buffer.
+```
+
+Still pending:
+
+- [ ] Exact `SaveRequest` protocol shape.
+- [ ] How server waits for missing transactions without blocking unrelated work.
+- [ ] Timeout/error behavior if required transactions never arrive.
+- [ ] Which initial built-in commands set `requires_fresh_buffer`.
+- [ ] Whether extension commands can declare `requires_fresh_buffer`.
+- [ ] Whether LSP requests always require fresh buffer or can use async snapshots.
+
+Suggested initial policy:
+
+```text
+Save waits for a specific transaction id with timeout.
+On timeout, report failure rather than saving stale text.
+Fresh-buffer command metadata is part of command descriptors and extension command descriptors.
+```
+
+## I. Client Text Model And GPUI Performance Work
+
+Core decision is locked:
+
+```text
+Client must maintain line/chunk metadata for bounded char/byte/UTF-16 conversion.
+Rendering must not clone/split whole visible text or shape whole long lines per key.
+```
+
+Still pending:
+
+- [ ] Exact `VisibleTextModel`, `VisibleLine`, and `VisibleChunk` data structures.
+- [ ] Chunk size and invalidation strategy.
+- [ ] Long-line horizontal viewport behavior.
+- [ ] How IME marked text interacts with chunk metadata.
+- [ ] How selections/multi-cursor will be represented.
+- [ ] How GPUI shaped-line/chunk cache invalidates on style/font/theme changes.
+- [ ] How UI profiler measures actual key-to-paint latency.
+
+Suggested initial policy:
+
+```text
+Implement the client text model before relying on char-range transactions for performance.
+Add real UI profiler mode before and after the model change to prove improvement.
+```
+
+## J. Documentation And Configuration Metadata
+
+Because routing, modes, fresh-buffer commands, and performance-sensitive behavior are user-visible/configurable, implementation must include structured metadata.
+
+Still pending:
+
+- [ ] Setting descriptors for routing/performance policies.
+- [ ] Mode descriptors for Normal and Read mode.
+- [ ] Command descriptors for Normal/Read mode switching and config reload.
+- [ ] Documentation for performance risks of server-routed printable keys.
+- [ ] Tests ensuring built-in settings/commands/modes have documentation metadata.
 
 ## 14. Tests And Benchmarks To Prove Improved Typing Latency
 
