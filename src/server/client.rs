@@ -18,7 +18,7 @@ pub(super) enum ClientConnectionState {
 #[derive(Debug)]
 pub(super) struct ClientConnection {
     pub(super) state: ClientConnectionState,
-    pub(super) tx: mpsc::UnboundedSender<ServerToClient>,
+    pub(super) tx: mpsc::Sender<ServerToClient>,
     pub(super) viewport: Viewport,
     pub(super) window_width: u32,
     pub(super) window_height: u32,
@@ -27,7 +27,7 @@ pub(super) struct ClientConnection {
 }
 
 impl ClientConnection {
-    pub(super) fn new(tx: mpsc::UnboundedSender<ServerToClient>) -> Self {
+    pub(super) fn new(tx: mpsc::Sender<ServerToClient>) -> Self {
         Self {
             state: ClientConnectionState::Connected,
             tx,

@@ -5,7 +5,6 @@ mod key_chord;
 mod key_input;
 mod keymap;
 mod r#loop;
-mod metrics;
 mod scene;
 mod socket_task;
 mod state;

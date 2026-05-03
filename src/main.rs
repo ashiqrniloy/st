@@ -7,6 +7,7 @@ mod editor;
 mod events;
 mod ipc;
 mod js_runtime;
+mod profiler;
 mod protocol;
 mod render;
 mod server;
@@ -20,6 +21,8 @@ fn main() {
         Ok(CliCommand::Client) => client::run(),
         Ok(CliCommand::Server(options)) => server::run_foreground(options),
         Ok(CliCommand::Quit) => server::request_shutdown(),
+        Ok(CliCommand::Profiler) => profiler::run(),
+        Ok(CliCommand::PerfGate) => profiler::run_perf_gate(),
         Err(message) => Err(message),
     };
 

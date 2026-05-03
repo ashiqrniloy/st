@@ -10,7 +10,6 @@ use crate::{
 use super::{
     key_chord::{normalize_key_name, parse_key_chord},
     key_input::{key_input_to_command_invocation, should_forward_to_js_runtime},
-    metrics::PerformanceMetrics,
     state::{EditorSceneSettings, EditorServer},
 };
 
@@ -77,8 +76,8 @@ fn forwarding_policy_does_not_forward_rust_handled_keys() {
 #[test]
 fn broadcasts_editor_updates_to_all_connected_clients() {
     let mut server = EditorServer::default();
-    let (client_1_tx, mut client_1_rx) = mpsc::unbounded_channel();
-    let (client_2_tx, mut client_2_rx) = mpsc::unbounded_channel();
+    let (client_1_tx, mut client_1_rx) = mpsc::channel(256);
+    let (client_2_tx, mut client_2_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
 
     let client_1 = ClientId(1);
@@ -94,10 +93,13 @@ fn broadcasts_editor_updates_to_all_connected_clients() {
 
     assert_eq!(
         client_1_rx.try_recv(),
-        Ok(ServerToClient::ScenePatch(ScenePatch::VisibleTextUpdate {
-            start_line: 0,
-            end_line: 200,
-            text: "x".into(),
+        Ok(ServerToClient::ScenePatch(ScenePatch::TextEditPatch {
+            buffer_id: 1,
+            base_version: 0,
+            new_version: 1,
+            replace_start_char: 0,
+            replace_end_char: 0,
+            replacement: "x".into(),
             cursor_char_index: 1,
             cursor_visible: true,
         }))
@@ -108,10 +110,13 @@ fn broadcasts_editor_updates_to_all_connected_clients() {
     );
     assert_eq!(
         client_2_rx.try_recv(),
-        Ok(ServerToClient::ScenePatch(ScenePatch::VisibleTextUpdate {
-            start_line: 0,
-            end_line: 200,
-            text: "x".into(),
+        Ok(ServerToClient::ScenePatch(ScenePatch::TextEditPatch {
+            buffer_id: 1,
+            base_version: 0,
+            new_version: 1,
+            replace_start_char: 0,
+            replace_end_char: 0,
+            replacement: "x".into(),
             cursor_char_index: 1,
             cursor_visible: true,
         }))
@@ -125,8 +130,8 @@ fn broadcasts_editor_updates_to_all_connected_clients() {
 #[test]
 fn close_client_only_closes_the_sending_connection() {
     let mut server = EditorServer::default();
-    let (client_1_tx, _client_1_rx) = mpsc::unbounded_channel();
-    let (client_2_tx, _client_2_rx) = mpsc::unbounded_channel();
+    let (client_1_tx, _client_1_rx) = mpsc::channel(256);
+    let (client_2_tx, _client_2_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
 
     let client_1 = ClientId(1);
@@ -149,7 +154,7 @@ fn close_client_only_closes_the_sending_connection() {
 #[test]
 fn shutdown_notifies_connected_clients() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
 
     let client_id = ClientId(1);
@@ -221,7 +226,7 @@ fn forwarding_policy_does_not_send_unregistered_keys_to_js() {
 #[test]
 fn documentation_query_lists_commands() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -244,7 +249,7 @@ fn documentation_query_lists_commands() {
 #[test]
 fn documentation_query_describes_command() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -269,7 +274,7 @@ fn documentation_query_describes_command() {
 #[test]
 fn documentation_query_returns_error_for_unknown_command() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -294,7 +299,7 @@ fn documentation_query_returns_error_for_unknown_command() {
 #[test]
 fn documentation_query_lists_builtin_settings() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -317,7 +322,7 @@ fn documentation_query_lists_builtin_settings() {
 #[test]
 fn documentation_query_lists_keybindings_from_live_keymap() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -342,7 +347,7 @@ fn documentation_query_lists_keybindings_from_live_keymap() {
 #[test]
 fn documentation_query_lists_builtin_api_docs() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -377,51 +382,9 @@ fn scene_update_uses_configurable_scene_settings() {
 }
 
 #[test]
-fn rust_handled_key_updates_key_to_scene_metrics() {
-    let mut server = EditorServer::default();
-    let (client_tx, _client_rx) = mpsc::unbounded_channel();
-    let (js_tx, _js_rx) = mpsc::unbounded_channel();
-    let client_id = ClientId(1);
-    server.register_client(client_id, client_tx);
-
-    assert!(!server.handle_message(
-        client_id,
-        ClientToServer::KeyInput(key_event("a", Some("a"))),
-        &js_tx,
-    ));
-
-    assert_eq!(server.metrics.key_to_scene_samples, 1);
-}
-
-#[test]
-fn outbound_queue_depth_metrics_track_enqueue_and_dequeue() {
-    let mut metrics = PerformanceMetrics::default();
-    let client_id = ClientId(7);
-
-    metrics.record_outbound_enqueue(client_id);
-    metrics.record_outbound_enqueue(client_id);
-    metrics.record_outbound_dequeue(client_id);
-
-    assert_eq!(
-        metrics
-            .per_client_outbound_queue_depth
-            .get(&client_id)
-            .copied(),
-        Some(1)
-    );
-    assert_eq!(
-        metrics
-            .per_client_outbound_queue_max_depth
-            .get(&client_id)
-            .copied(),
-        Some(2)
-    );
-}
-
-#[test]
 fn rust_builtin_key_dispatch_does_not_invoke_js_runtime() {
     let mut server = EditorServer::default();
-    let (client_tx, _client_rx) = mpsc::unbounded_channel();
+    let (client_tx, _client_rx) = mpsc::channel(256);
     let (js_tx, mut js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -438,7 +401,7 @@ fn rust_builtin_key_dispatch_does_not_invoke_js_runtime() {
 #[test]
 fn js_keybinding_dispatch_invokes_js_runtime() {
     let mut server = EditorServer::default();
-    let (client_tx, _client_rx) = mpsc::unbounded_channel();
+    let (client_tx, _client_rx) = mpsc::channel(256);
     let (js_tx, mut js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -481,7 +444,7 @@ fn js_keybinding_dispatch_invokes_js_runtime() {
 #[test]
 fn malformed_js_keybinding_registration_cannot_mutate_editor_state() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -507,7 +470,7 @@ fn malformed_js_keybinding_registration_cannot_mutate_editor_state() {
 #[test]
 fn js_keybinding_registration_rejects_unknown_command() {
     let mut server = EditorServer::default();
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel();
+    let (client_tx, mut client_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
     let client_id = ClientId(1);
     server.register_client(client_id, client_tx);
@@ -531,8 +494,8 @@ fn js_keybinding_registration_rejects_unknown_command() {
 #[test]
 fn per_client_viewports_receive_independent_visible_text_updates() {
     let mut server = EditorServer::default();
-    let (client_1_tx, mut client_1_rx) = mpsc::unbounded_channel();
-    let (client_2_tx, mut client_2_rx) = mpsc::unbounded_channel();
+    let (client_1_tx, mut client_1_rx) = mpsc::channel(256);
+    let (client_2_tx, mut client_2_rx) = mpsc::channel(256);
     let (js_tx, _js_rx) = mpsc::unbounded_channel();
 
     let client_1 = ClientId(1);
@@ -575,16 +538,22 @@ fn per_client_viewports_receive_independent_visible_text_updates() {
     let c2 = client_2_rx.try_recv().expect("client2 patch");
 
     match c1 {
+        ServerToClient::SceneSnapshot(scene) => {
+            assert!(scene.text.contains("line1"));
+        }
         ServerToClient::ScenePatch(ScenePatch::VisibleTextUpdate { text, .. }) => {
             assert!(text.contains("line1"));
         }
-        other => panic!("expected visible text patch for client1, got {other:?}"),
+        other => panic!("expected snapshot or visible text update for client1, got {other:?}"),
     }
 
     match c2 {
+        ServerToClient::SceneSnapshot(scene) => {
+            assert!(scene.text.contains("line2"));
+        }
         ServerToClient::ScenePatch(ScenePatch::VisibleTextUpdate { text, .. }) => {
             assert!(text.contains("line2"));
         }
-        other => panic!("expected visible text patch for client2, got {other:?}"),
+        other => panic!("expected snapshot or visible text update for client2, got {other:?}"),
     }
 }

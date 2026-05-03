@@ -10,6 +10,8 @@ pub enum CliCommand {
     Client,
     Server(ServerOptions),
     Quit,
+    Profiler,
+    PerfGate,
 }
 
 impl CliCommand {
@@ -59,13 +61,15 @@ impl CliCommand {
                 Ok(Self::Server(ServerOptions { idle_timeout_secs }))
             }
             "quit" | "--quit" => Ok(Self::Quit),
+            "profiler" | "--profiler" => Ok(Self::Profiler),
+            "perf-gate" | "--perf-gate" => Ok(Self::PerfGate),
             "-h" | "--help" | "help" => Err(Self::usage()),
             unknown => Err(format!("unknown command: {unknown}\n\n{}", Self::usage())),
         }
     }
 
     pub fn usage() -> String {
-        "Usage:\n  st             Open a client, starting the server if needed\n  st client      Open a client\n  st server      Run the server in the foreground (no idle timeout)\n  st server --idle-timeout-secs <N>\n                 Run server with optional idle shutdown\n  st quit        Ask the server to shut down\n\nCargo examples:\n  cargo run\n  cargo run -- client\n  cargo run -- server\n  cargo run -- server --idle-timeout-secs 300\n  cargo run -- quit".into()
+        "Usage:\n  st             Open a client, starting the server if needed\n  st client      Open a client\n  st server      Run the server in the foreground (no idle timeout)\n  st server --idle-timeout-secs <N>\n                 Run server with optional idle shutdown\n  st quit        Ask the server to shut down\n  st profiler    Run standalone performance profiler simulation\n  st perf-gate   Run performance regression gate assertions\n\nCargo examples:\n  cargo run\n  cargo run -- client\n  cargo run -- server\n  cargo run -- server --idle-timeout-secs 300\n  cargo run -- quit\n  cargo run -- profiler\n  cargo run -- perf-gate".into()
     }
 }
 
@@ -80,6 +84,8 @@ mod tests {
         assert!(usage.contains("st server"));
         assert!(usage.contains("--idle-timeout-secs"));
         assert!(usage.contains("st quit"));
+        assert!(usage.contains("st profiler"));
+        assert!(usage.contains("st perf-gate"));
     }
 
     #[test]

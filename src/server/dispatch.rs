@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use tokio::sync::mpsc;
 
 use crate::{
@@ -13,6 +11,7 @@ use super::{
     key_chord::{normalize_key_input, parse_key_chord},
     key_input::{key_input_to_command_invocation, should_forward_to_js_runtime},
     keymap::{KeyResolution, RegisteredKeybinding},
+    scene::TextEditOp,
     state::EditorServer,
 };
 
@@ -116,13 +115,16 @@ impl EditorServer {
                         );
                         self.send_scene_snapshot_to_client(client_id);
                     }
-                } else if let Err(err) = self
-                    .command_registry
-                    .execute(CommandInvocation::new(command_id), &mut self.editor)
-                {
-                    self.send_to_client(client_id, ServerToClient::Error { message: err });
                 } else {
-                    self.send_scene_patch_updates();
+                    let invocation = CommandInvocation::new(command_id);
+                    let maybe_edit = self.edit_op_for_invocation(&invocation);
+                    if let Err(err) = self.command_registry.execute(invocation, &mut self.editor) {
+                        self.send_to_client(client_id, ServerToClient::Error { message: err });
+                    } else if let Some(edit) = maybe_edit {
+                        self.send_text_edit_patch_updates(&edit);
+                    } else {
+                        self.send_scene_patch_updates();
+                    }
                 }
             }
             Some(crate::commands::CommandHandler::JsCommand {
@@ -150,6 +152,31 @@ impl EditorServer {
                     },
                 );
             }
+        }
+    }
+
+    fn edit_op_for_invocation(&self, invocation: &CommandInvocation) -> Option<TextEditOp> {
+        let base_version = self.editor.buffer.version().0;
+        let cursor = self.editor.cursor;
+        match invocation.command_id.as_str() {
+            "editor.insert_text" => {
+                let replacement = invocation.text.clone()?;
+                Some(TextEditOp {
+                    start_char: cursor,
+                    end_char: cursor,
+                    replacement,
+                    base_version,
+                    new_version: base_version + 1,
+                })
+            }
+            "editor.backspace" if cursor > 0 => Some(TextEditOp {
+                start_char: cursor - 1,
+                end_char: cursor,
+                replacement: String::new(),
+                base_version,
+                new_version: base_version + 1,
+            }),
+            _ => None,
         }
     }
 
@@ -191,8 +218,11 @@ impl EditorServer {
         }
 
         if let Some(invocation) = key_input_to_command_invocation(&event) {
+            let maybe_edit = self.edit_op_for_invocation(&invocation);
             if let Err(err) = self.command_registry.execute(invocation, &mut self.editor) {
                 self.send_to_client(client_id, ServerToClient::Error { message: err });
+            } else if let Some(edit) = maybe_edit {
+                self.send_text_edit_patch_updates(&edit);
             } else {
                 self.send_scene_patch_updates();
             }
@@ -217,13 +247,9 @@ impl EditorServer {
                 self.send_scene_snapshot_to_client(client_id);
             }
             ClientToServer::KeyInput(event) => {
-                let key_to_scene_started = Instant::now();
                 self.handle_key_input(client_id, event, js_event_tx);
-                self.metrics.key_to_scene_samples += 1;
-                self.metrics.key_to_scene_total += key_to_scene_started.elapsed();
             }
             ClientToServer::Command(command) => {
-                let key_to_scene_started = Instant::now();
                 let invocation = match editor_command_to_invocation(command) {
                     Ok(invocation) => invocation,
                     Err(err) => {
@@ -266,13 +292,15 @@ impl EditorServer {
                         );
                         self.send_scene_snapshot_to_client(client_id);
                     }
-                } else if let Err(err) = self.command_registry.execute(invocation, &mut self.editor)
-                {
-                    self.send_to_client(client_id, ServerToClient::Error { message: err });
                 } else {
-                    self.send_scene_patch_updates();
-                    self.metrics.key_to_scene_samples += 1;
-                    self.metrics.key_to_scene_total += key_to_scene_started.elapsed();
+                    let maybe_edit = self.edit_op_for_invocation(&invocation);
+                    if let Err(err) = self.command_registry.execute(invocation, &mut self.editor) {
+                        self.send_to_client(client_id, ServerToClient::Error { message: err });
+                    } else if let Some(edit) = maybe_edit {
+                        self.send_text_edit_patch_updates(&edit);
+                    } else {
+                        self.send_scene_patch_updates();
+                    }
                 }
             }
             ClientToServer::CloseClient {
@@ -315,6 +343,9 @@ impl EditorServer {
                     client.window_width = width.max(1);
                     client.window_height = height.max(1);
                 }
+                self.send_scene_snapshot_to_client(client_id);
+            }
+            ClientToServer::ResyncScene => {
                 self.send_scene_snapshot_to_client(client_id);
             }
             ClientToServer::RegisterJsCommand {

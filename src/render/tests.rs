@@ -1,4 +1,4 @@
-use super::{key, panes, selection};
+use super::{key, panes, selection, text_cache::VisibleTextCache};
 use crate::{events::PaneScene, window_layout::PaneId};
 use gpui::{Bounds, KeyDownEvent, Keystroke, Modifiers, point, px, size};
 
@@ -111,6 +111,24 @@ fn modified_gpui_key_down_becomes_server_key_input() {
     assert!(!input.alt);
     assert!(!input.meta);
     assert!(input.text.is_none());
+}
+
+#[test]
+fn text_cache_tracks_single_line_edit_as_dirty() {
+    let mut cache = VisibleTextCache::from_content("abc");
+    let _ = cache.take_dirty_lines();
+    let stats = cache.replace_char_range("abc", 1, 2, "Z");
+    assert_eq!(stats.dirty_line_count, 1);
+    assert_eq!(cache.take_dirty_lines(), vec![0]);
+}
+
+#[test]
+fn text_cache_handles_newline_insert_dirty_range() {
+    let mut cache = VisibleTextCache::from_content("abc\ndef");
+    let _ = cache.take_dirty_lines();
+    let stats = cache.replace_char_range("abc\ndef", 3, 3, "\n");
+    assert!(stats.dirty_line_count >= 1);
+    assert!(!cache.take_dirty_lines().is_empty());
 }
 
 #[test]

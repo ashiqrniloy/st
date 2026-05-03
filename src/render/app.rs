@@ -10,7 +10,7 @@ use crate::{
     events::{EditorEvent, PaneScene, SceneUpdate},
 };
 
-use super::{UiChannels, actions, root_view::RootView};
+use super::{UiChannels, UiSceneEvent, actions, root_view::RootView};
 
 pub(super) fn run_ui_with_gpui(channels: UiChannels) -> Result<(), String> {
     Application::new().run(move |cx: &mut App| {
@@ -45,6 +45,10 @@ pub(super) fn run_ui_with_gpui(channels: UiChannels) -> Result<(), String> {
                 let initial = SceneUpdate {
                     background_color: DEFAULT_EDITOR_BACKGROUND_COLOR,
                     text: String::new(),
+                    buffer_id: 1,
+                    buffer_version: 0,
+                    viewport_start_line: 0,
+                    viewport_end_line: 1,
                     cursor_char_index: 0,
                     cursor_visible: DEFAULT_CURSOR_VISIBLE,
                     panes: vec![PaneScene {
@@ -79,9 +83,12 @@ pub(super) fn run_ui_with_gpui(channels: UiChannels) -> Result<(), String> {
         };
 
         cx.spawn(async move |cx| {
-            while let Some(scene) = scene_rx.recv().await {
+            while let Some(scene_event) = scene_rx.recv().await {
                 if view
-                    .update(cx, |view, cx| view.apply_scene_update(scene, cx))
+                    .update(cx, |view, cx| match scene_event {
+                        UiSceneEvent::Snapshot(scene) => view.apply_scene_update(scene, cx),
+                        UiSceneEvent::Patch(patch) => view.apply_scene_patch(patch, cx),
+                    })
                     .is_err()
                 {
                     break;

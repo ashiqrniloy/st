@@ -57,6 +57,10 @@ fn scene_message_round_trips_through_json() {
     let message = ServerToClient::SceneSnapshot(SceneUpdate {
         background_color: 0x1e1e2e,
         text: "abc".into(),
+        buffer_id: 1,
+        buffer_version: 1,
+        viewport_start_line: 0,
+        viewport_end_line: 10,
         cursor_char_index: 2,
         cursor_visible: true,
         panes: vec![],

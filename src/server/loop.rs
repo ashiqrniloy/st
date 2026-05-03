@@ -28,9 +28,6 @@ pub(super) enum ServerEvent {
     ClientDisconnected {
         client_id: ClientId,
     },
-    OutboundDequeued {
-        client_id: ClientId,
-    },
     JsRenderCommand(RenderCommand),
 }
 
@@ -98,7 +95,7 @@ async fn run_server(options: ServerOptions) -> io::Result<()> {
                 };
 
                 let client_id = server.allocate_client_id();
-                let (client_tx, client_rx) = mpsc::unbounded_channel::<ServerToClient>();
+                let (client_tx, client_rx) = mpsc::channel::<ServerToClient>(256);
                 server.register_client(client_id, client_tx);
 
                 println!("Server: client {client_id:?} connected");
@@ -118,29 +115,20 @@ async fn run_server(options: ServerOptions) -> io::Result<()> {
                 };
 
                 server_queue_depth.fetch_sub(1, Ordering::Relaxed);
-                server.metrics.record_server_queue_dequeue();
 
                 match event {
                     ServerEvent::ClientMessage { client_id, message } => {
-                        if let Ok(encoded) = serde_json::to_vec(&message) {
-                            server.metrics.ipc_inbound_bytes += (encoded.len() + 1) as u64;
-                        }
                         if server.handle_message(client_id, message, &js_event_tx) {
                             break Ok(());
                         }
                     }
                     ServerEvent::ClientDisconnected { client_id } => {
-                        server.metrics.per_client_outbound_queue_depth.remove(&client_id);
-                        server.metrics.per_client_outbound_queue_max_depth.remove(&client_id);
                         server.remove_client(client_id);
                         println!("Server: client {client_id:?} disconnected");
                         if server.clients.is_empty() {
                             idle_deadline = idle_timeout
                                 .map(|timeout| tokio::time::Instant::now() + timeout);
                         }
-                    }
-                    ServerEvent::OutboundDequeued { client_id } => {
-                        server.metrics.record_outbound_dequeue(client_id);
                     }
                     ServerEvent::JsRenderCommand(command) => {
                         println!("Server: render command from JS runtime: {command:?}");
@@ -150,7 +138,6 @@ async fn run_server(options: ServerOptions) -> io::Result<()> {
             command = js_render_rx.recv() => {
                 if let Some(command) = command {
                     server_queue_depth.fetch_add(1, Ordering::Relaxed);
-                    server.metrics.record_server_queue_enqueue();
                     let _ = server_tx.send(ServerEvent::JsRenderCommand(command));
                 }
             }

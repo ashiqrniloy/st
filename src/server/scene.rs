@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use crate::{
     events::{PaneScene, ScenePatch, SceneUpdate, Viewport},
     protocol::{ClientId, ServerToClient},
@@ -9,6 +7,15 @@ use super::{
     client::{ClientConnectionState, pane_scenes},
     state::EditorServer,
 };
+
+#[derive(Debug, Clone)]
+pub(super) struct TextEditOp {
+    pub(super) start_char: usize,
+    pub(super) end_char: usize,
+    pub(super) replacement: String,
+    pub(super) base_version: u64,
+    pub(super) new_version: u64,
+}
 
 impl EditorServer {
     pub(super) fn scene_snapshot_for_viewport(
@@ -21,6 +28,10 @@ impl EditorServer {
         SceneUpdate {
             background_color: self.scene_settings.background_color,
             text,
+            buffer_id: self.editor.buffer.id().0,
+            buffer_version: self.editor.buffer.version().0,
+            viewport_start_line: viewport.start_line,
+            viewport_end_line: viewport.end_line,
             cursor_char_index: cursor,
             cursor_visible: self.scene_settings.cursor_visible,
             panes,
@@ -28,6 +39,12 @@ impl EditorServer {
     }
 
     pub(super) fn visible_text_for_viewport(&self, viewport: Viewport) -> (usize, usize, String) {
+        let (start_char, end_char) = self.visible_char_range_for_viewport(viewport);
+        let text = self.editor.buffer.slice_chars(start_char, end_char);
+        (start_char, end_char, text)
+    }
+
+    pub(super) fn visible_char_range_for_viewport(&self, viewport: Viewport) -> (usize, usize) {
         let total_lines = self.editor.buffer.line_count();
         let start_line = viewport.start_line.min(total_lines.saturating_sub(1));
         let end_line = viewport.end_line.max(start_line + 1).min(total_lines);
@@ -37,8 +54,7 @@ impl EditorServer {
         } else {
             self.editor.buffer.line_col_to_char(end_line, 0)
         };
-        let text = self.editor.buffer.slice_chars(start_char, end_char);
-        (start_char, end_char, text)
+        (start_char, end_char)
     }
 
     pub(super) fn send_scene_snapshot_to_client(&mut self, client_id: ClientId) {
@@ -54,7 +70,6 @@ impl EditorServer {
     }
 
     pub(super) fn send_scene_patch_updates(&mut self) {
-        let started = Instant::now();
         let targets: Vec<(ClientId, Viewport)> = self
             .clients
             .iter()
@@ -71,37 +86,79 @@ impl EditorServer {
                     start_line: viewport.start_line,
                     end_line: viewport.end_line,
                     text,
+                    buffer_id: self.editor.buffer.id().0,
+                    buffer_version: self.editor.buffer.version().0,
                     cursor_char_index: cursor,
                     cursor_visible: self.scene_settings.cursor_visible,
                 }),
             );
         }
+    }
 
-        self.metrics.scene_to_client_samples += 1;
-        self.metrics.scene_to_client_total += started.elapsed();
+    pub(super) fn send_text_edit_patch_updates(&mut self, edit: &TextEditOp) {
+        let targets: Vec<(ClientId, Viewport)> = self
+            .clients
+            .iter()
+            .filter(|(_, client)| client.state == ClientConnectionState::Connected)
+            .map(|(id, client)| (*id, client.viewport))
+            .collect();
+
+        for (client_id, viewport) in targets {
+            let (start_char, end_char) = self.visible_char_range_for_viewport(viewport);
+
+            let edit_in_view = edit.start_char >= start_char
+                && edit.end_char <= end_char
+                && self.editor.cursor >= start_char
+                && self.editor.cursor <= end_char;
+
+            if !edit_in_view {
+                self.send_scene_snapshot_to_client(client_id);
+                continue;
+            }
+
+            let cursor = self.editor.cursor - start_char;
+            self.send_to_client(
+                client_id,
+                ServerToClient::ScenePatch(ScenePatch::TextEditPatch {
+                    buffer_id: self.editor.buffer.id().0,
+                    base_version: edit.base_version,
+                    new_version: edit.new_version,
+                    replace_start_char: edit.start_char - start_char,
+                    replace_end_char: edit.end_char - start_char,
+                    replacement: edit.replacement.clone(),
+                    cursor_char_index: cursor,
+                    cursor_visible: self.scene_settings.cursor_visible,
+                }),
+            );
+        }
     }
 
     pub(super) fn send_to_client(&mut self, client_id: ClientId, message: ServerToClient) {
-        if let Ok(encoded) = serde_json::to_vec(&message) {
-            self.metrics.ipc_outbound_bytes += (encoded.len() + 1) as u64;
-        }
-
-        self.metrics.record_outbound_enqueue(client_id);
-        let should_remove = self
-            .clients
-            .get(&client_id)
-            .is_some_and(|client| client.tx.send(message).is_err());
-
-        if should_remove {
-            self.remove_client(client_id);
+        let Some(client) = self.clients.get(&client_id) else {
+            return;
+        };
+        match client.tx.try_send(message.clone()) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                self.remove_client(client_id);
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                let drop_safe = matches!(
+                    message,
+                    ServerToClient::ScenePatch(ScenePatch::CursorUpdate { .. })
+                        | ServerToClient::ScenePatch(ScenePatch::SelectionUpdate { .. })
+                );
+                if drop_safe {
+                    self.queue_stats.inc_coalesced();
+                } else {
+                    self.queue_stats.inc_dropped();
+                    self.remove_client(client_id);
+                }
+            }
         }
     }
 
     pub(super) fn send_to_all(&mut self, message: ServerToClient) {
-        if let Ok(encoded) = serde_json::to_vec(&message) {
-            self.metrics.ipc_outbound_bytes += (encoded.len() + 1) as u64;
-        }
-
         let dead_clients: Vec<ClientId> = self
             .clients
             .iter()
@@ -110,8 +167,7 @@ impl EditorServer {
                     return None;
                 }
 
-                self.metrics.record_outbound_enqueue(*client_id);
-                if client.tx.send(message.clone()).is_err() {
+                if client.tx.try_send(message.clone()).is_err() {
                     Some(*client_id)
                 } else {
                     None

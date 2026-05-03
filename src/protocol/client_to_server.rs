@@ -36,4 +36,5 @@ pub enum ClientToServer {
         width: u32,
         height: u32,
     },
+    ResyncScene,
 }

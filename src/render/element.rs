@@ -56,20 +56,21 @@ impl Element for TextSurface {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let view = self.view.read(cx);
-        let text_bounds = panes::active_text_bounds(bounds, &view.panes);
-        let content = view.content.clone();
-        let selected_range = view.selected_range.clone();
-        let cursor = view.cursor_offset();
-        let lines_text: Vec<String> = if content.is_empty() {
-            vec![String::new()]
-        } else {
-            content.split('\n').map(str::to_string).collect()
+        let (text_bounds, content, selected_range, cursor, line_height) = {
+            let view = self.view.read(cx);
+            (
+                panes::active_text_bounds(bounds, &view.panes),
+                view.content.clone(),
+                view.selected_range.clone(),
+                view.cursor_offset(),
+                view.line_height,
+            )
         };
-
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let run = gpui::TextRun {
+        let font_size_px = f32::from(font_size);
+
+        let run_template = gpui::TextRun {
             len: 0,
             font: style.font(),
             color: rgb(crate::configuration::DEFAULT_EDITOR_TEXT_COLOR).into(),
@@ -78,16 +79,56 @@ impl Element for TextSurface {
             strikethrough: None,
         };
 
-        let shaped_lines: Vec<ShapedLine> = lines_text
-            .iter()
-            .map(|line_text| {
-                let mut r = run.clone();
-                r.len = line_text.len();
-                window
+        let lines_text: Vec<String> = if content.is_empty() {
+            vec![String::new()]
+        } else {
+            content.split('\n').map(str::to_string).collect()
+        };
+
+        let mut dirty_lines = self.view.update(cx, |view, _cx| {
+            let mut dirty = view.text_cache.take_dirty_lines();
+            let style_changed = view
+                .shaped_cache_font_size_px
+                .is_none_or(|cached| (cached - font_size_px).abs() > f32::EPSILON);
+            if style_changed {
+                dirty.extend(0..lines_text.len());
+                view.shaped_cache_font_size_px = Some(font_size_px);
+            }
+            if view.shaped_line_cache.len() != lines_text.len() {
+                view.shaped_line_cache.resize(lines_text.len(), None);
+                view.shaped_line_text_cache.resize(lines_text.len(), String::new());
+                dirty.extend(0..lines_text.len());
+            }
+            dirty
+        });
+
+        dirty_lines.sort_unstable();
+        dirty_lines.dedup();
+
+        self.view.update(cx, |view, _cx| {
+            for line_idx in dirty_lines.iter().copied() {
+                if line_idx >= lines_text.len() {
+                    continue;
+                }
+                let line_text = lines_text[line_idx].clone();
+                let mut run = run_template.clone();
+                run.len = line_text.len();
+                let shaped = window
                     .text_system()
-                    .shape_line(line_text.clone().into(), font_size, &[r], None)
+                    .shape_line(line_text.clone().into(), font_size, &[run], None);
+                view.shaped_line_cache[line_idx] = Some(shaped);
+                view.shaped_line_text_cache[line_idx] = line_text;
+            }
+
+        });
+
+        let shaped_lines: Vec<ShapedLine> = self.view.read(cx).shaped_line_cache.iter().map(|line| {
+            line.clone().unwrap_or_else(|| {
+                let mut run = run_template.clone();
+                run.len = 0;
+                window.text_system().shape_line(String::new().into(), font_size, &[run], None)
             })
-            .collect();
+        }).collect();
 
         let (cursor_line, cursor_col) = layout::line_and_col_for_byte(&content, cursor);
         let cursor_x = shaped_lines
@@ -99,9 +140,9 @@ impl Element for TextSurface {
             Bounds::new(
                 point(
                     text_bounds.left() + cursor_x,
-                    text_bounds.top() + view.line_height * cursor_line as f32,
+                    text_bounds.top() + line_height * cursor_line as f32,
                 ),
-                size(px(2.0), view.line_height),
+                size(px(2.0), line_height),
             ),
             gpui::blue(),
         ));
@@ -130,11 +171,11 @@ impl Element for TextSurface {
                         Bounds::from_corners(
                             point(
                                 text_bounds.left() + start_x,
-                                text_bounds.top() + view.line_height * line_idx as f32,
+                                text_bounds.top() + line_height * line_idx as f32,
                             ),
                             point(
                                 text_bounds.left() + end_x,
-                                text_bounds.top() + view.line_height * (line_idx as f32 + 1.0),
+                                text_bounds.top() + line_height * (line_idx as f32 + 1.0),
                             ),
                         ),
                         rgb(crate::configuration::DEFAULT_SELECTION_COLOR),
@@ -160,12 +201,12 @@ impl Element for TextSurface {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.view.update(cx, |view, _cx| {
-            view.report_window_dimensions_if_changed(bounds);
-        });
-
         let focus_handle = self.view.read(cx).focus_handle.clone();
         let text_bounds = panes::active_text_bounds(bounds, &self.view.read(cx).panes);
+        self.view.update(cx, |view, _cx| {
+            view.report_window_dimensions_if_changed(bounds);
+            view.report_viewport_if_changed(text_bounds);
+        });
         window.handle_input(
             &focus_handle,
             ElementInputHandler::new(text_bounds, self.view.clone()),

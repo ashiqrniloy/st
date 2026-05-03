@@ -21,5 +21,8 @@ pub enum EditorEvent {
         width: u32,
         height: u32,
     },
+    ViewportChanged {
+        viewport: Viewport,
+    },
     Shutdown,
 }

@@ -1,4 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use tokio::sync::mpsc;
 
@@ -12,7 +18,6 @@ use crate::{
 use super::{
     client::{ClientConnection, ClientConnectionState},
     keymap::Keymap,
-    metrics::PerformanceMetrics,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +35,21 @@ impl Default for EditorSceneSettings {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
+pub struct QueueStats {
+    pub outbound_dropped: Arc<AtomicU64>,
+    pub outbound_coalesced: Arc<AtomicU64>,
+}
+
+impl QueueStats {
+    pub fn inc_dropped(&self) {
+        self.outbound_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_coalesced(&self) {
+        self.outbound_coalesced.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 pub struct EditorServer {
     // Performance guardrail: Rust owns typing/cursor/edit/scene hot paths.
     pub(super) editor: EditorState,
@@ -39,7 +58,7 @@ pub struct EditorServer {
     pub(super) keymap: Keymap,
     pub(super) next_client_id: u64,
     pub(super) clients: HashMap<ClientId, ClientConnection>,
-    pub(super) metrics: PerformanceMetrics,
+    pub(super) queue_stats: QueueStats,
 }
 
 impl Default for EditorServer {
@@ -64,7 +83,7 @@ impl Default for EditorServer {
             keymap,
             next_client_id: 1,
             clients: HashMap::new(),
-            metrics: PerformanceMetrics::default(),
+            queue_stats: QueueStats::default(),
         }
     }
 }
@@ -79,7 +98,7 @@ impl EditorServer {
     pub(super) fn register_client(
         &mut self,
         client_id: ClientId,
-        tx: mpsc::UnboundedSender<ServerToClient>,
+        tx: mpsc::Sender<ServerToClient>,
     ) {
         self.clients.insert(client_id, ClientConnection::new(tx));
     }

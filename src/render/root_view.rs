@@ -7,9 +7,9 @@ use gpui::{
 };
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::events::{EditorEvent, KeyInputEvent, PaneScene, SceneUpdate};
+use crate::events::{EditorEvent, KeyInputEvent, PaneScene, ScenePatch, SceneUpdate, Viewport};
 
-use super::{element::TextSurface, key, layout, selection};
+use super::{element::TextSurface, key, layout, selection, text_cache::VisibleTextCache};
 
 pub(super) struct RootView {
     pub(super) ui_tx: tokio_mpsc::UnboundedSender<EditorEvent>,
@@ -26,6 +26,11 @@ pub(super) struct RootView {
     pub(super) cursor_visible: bool,
     pub(super) panes: Vec<PaneScene>,
     pub(super) last_reported_dimensions: Option<(u32, u32)>,
+    pub(super) current_viewport: Viewport,
+    pub(super) text_cache: VisibleTextCache,
+    pub(super) shaped_line_cache: Vec<Option<ShapedLine>>,
+    pub(super) shaped_line_text_cache: Vec<String>,
+    pub(super) shaped_cache_font_size_px: Option<f32>,
 }
 
 impl RootView {
@@ -34,10 +39,11 @@ impl RootView {
         ui_tx: tokio_mpsc::UnboundedSender<EditorEvent>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let text = scene.text;
         let mut s = Self {
             ui_tx,
             focus_handle: cx.focus_handle(),
-            content: scene.text,
+            content: text.clone(),
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -49,6 +55,14 @@ impl RootView {
             cursor_visible: scene.cursor_visible,
             panes: scene.panes,
             last_reported_dimensions: None,
+            current_viewport: Viewport {
+                start_line: scene.viewport_start_line,
+                end_line: scene.viewport_end_line,
+            },
+            text_cache: VisibleTextCache::from_content(&text),
+            shaped_line_cache: Vec::new(),
+            shaped_line_text_cache: Vec::new(),
+            shaped_cache_font_size_px: None,
         };
         let cursor = selection::char_to_byte_index(&s.content, scene.cursor_char_index);
         s.selected_range = cursor..cursor;
@@ -59,13 +73,71 @@ impl RootView {
         self.background_color = scene.background_color;
         self.cursor_visible = scene.cursor_visible;
         self.panes = scene.panes;
+        self.current_viewport = Viewport {
+            start_line: scene.viewport_start_line,
+            end_line: scene.viewport_end_line,
+        };
         if self.marked_range.is_none() && !self.is_selecting {
             self.content = scene.text;
+            self.text_cache = VisibleTextCache::from_content(&self.content);
+            self.shaped_line_cache.clear();
+            self.shaped_line_text_cache.clear();
             let cursor = selection::char_to_byte_index(&self.content, scene.cursor_char_index);
             self.selected_range = cursor..cursor;
             self.selection_reversed = false;
         }
         cx.notify();
+    }
+
+    pub(super) fn apply_scene_patch(&mut self, patch: ScenePatch, cx: &mut Context<Self>) {
+        match patch {
+            ScenePatch::TextEditPatch {
+                replace_start_char,
+                replace_end_char,
+                replacement,
+                cursor_char_index,
+                cursor_visible,
+                ..
+            } => {
+                self.cursor_visible = cursor_visible;
+                if self.marked_range.is_none() && !self.is_selecting {
+                    let start = selection::char_to_byte_index(&self.content, replace_start_char);
+                    let end = selection::char_to_byte_index(&self.content, replace_end_char);
+                    self.text_cache
+                        .replace_byte_range(&self.content, start, end, &replacement);
+                    self.content.replace_range(start..end, &replacement);
+                    let cursor = selection::char_to_byte_index(&self.content, cursor_char_index);
+                    self.selected_range = cursor..cursor;
+                    self.selection_reversed = false;
+                }
+                cx.notify();
+            }
+            ScenePatch::VisibleTextUpdate {
+                start_line,
+                end_line,
+                text,
+                cursor_char_index,
+                cursor_visible,
+                ..
+            } => {
+                self.cursor_visible = cursor_visible;
+                self.current_viewport = Viewport {
+                    start_line,
+                    end_line,
+                };
+                if self.marked_range.is_none() && !self.is_selecting {
+                    self.content = text;
+                    self.text_cache = VisibleTextCache::from_content(&self.content);
+                    self.shaped_line_cache.clear();
+                    self.shaped_line_text_cache.clear();
+                    let cursor = selection::char_to_byte_index(&self.content, cursor_char_index);
+                    self.selected_range = cursor..cursor;
+                    self.selection_reversed = false;
+                }
+                cx.notify();
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn send_key(&self, logical_key: &str, text: Option<String>, shift: bool) {
@@ -100,6 +172,20 @@ impl RootView {
         let _ = self
             .ui_tx
             .send(EditorEvent::WindowDimensionsChanged { width, height });
+    }
+
+    pub(super) fn report_viewport_if_changed(&mut self, text_bounds: gpui::Bounds<Pixels>) {
+        let visible_lines = ((f32::from(text_bounds.size.height) / f32::from(self.line_height))
+            .floor()
+            .max(1.0)) as usize;
+        let next = Viewport {
+            start_line: self.current_viewport.start_line,
+            end_line: self.current_viewport.start_line + visible_lines,
+        };
+        if next != self.current_viewport {
+            self.current_viewport = next;
+            let _ = self.ui_tx.send(EditorEvent::ViewportChanged { viewport: next });
+        }
     }
 
     pub(super) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {

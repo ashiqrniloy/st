@@ -17,7 +17,7 @@ pub(super) async fn handle_client(
     stream: UnixStream,
     server_tx: mpsc::UnboundedSender<ServerEvent>,
     server_queue_depth: Arc<AtomicUsize>,
-    mut outbound_rx: mpsc::UnboundedReceiver<ServerToClient>,
+    mut outbound_rx: mpsc::Receiver<ServerToClient>,
 ) {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -62,9 +62,6 @@ pub(super) async fn handle_client(
                 let Some(message) = outbound else {
                     break;
                 };
-
-                server_queue_depth.fetch_add(1, Ordering::Relaxed);
-                let _ = server_tx.send(ServerEvent::OutboundDequeued { client_id });
 
                 if let Err(err) = write_json_line(&mut writer, &message).await {
                     eprintln!("Server: failed to send message to {client_id:?}: {err}");
